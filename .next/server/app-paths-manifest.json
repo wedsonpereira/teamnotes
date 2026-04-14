@@ -1,0 +1,21 @@
+{
+  "/_global-error/page": "app/_global-error/page.js",
+  "/_not-found/page": "app/_not-found/page.js",
+  "/api/rooms/[roomId]/members/route": "app/api/rooms/[roomId]/members/route.js",
+  "/api/rooms/[roomId]/pages/[pageId]/route": "app/api/rooms/[roomId]/pages/[pageId]/route.js",
+  "/api/rooms/[roomId]/pages/route": "app/api/rooms/[roomId]/pages/route.js",
+  "/api/rooms/[roomId]/route": "app/api/rooms/[roomId]/route.js",
+  "/api/rooms/[roomId]/save/route": "app/api/rooms/[roomId]/save/route.js",
+  "/api/rooms/[roomId]/settings/route": "app/api/rooms/[roomId]/settings/route.js",
+  "/api/rooms/create/route": "app/api/rooms/create/route.js",
+  "/api/rooms/forgot-key/route": "app/api/rooms/forgot-key/route.js",
+  "/api/rooms/forgot-roomid/route": "app/api/rooms/forgot-roomid/route.js",
+  "/api/rooms/invite/accept/route": "app/api/rooms/invite/accept/route.js",
+  "/api/rooms/join/route": "app/api/rooms/join/route.js",
+  "/api/rooms/reenter/route": "app/api/rooms/reenter/route.js",
+  "/api/rooms/reset-key/[token]/route": "app/api/rooms/reset-key/[token]/route.js",
+  "/favicon.ico/route": "app/favicon.ico/route.js",
+  "/page": "app/page.js",
+  "/reset-key/[token]/page": "app/reset-key/[token]/page.js",
+  "/room/[roomId]/page": "app/room/[roomId]/page.js"
+}

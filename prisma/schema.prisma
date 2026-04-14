@@ -1,0 +1,80 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String       @id @default(cuid())
+  firstName String
+  lastName  String
+  email     String       @unique
+  rooms     RoomMember[]
+  adminOf   Room[]       @relation("RoomAdmin")
+  createdAt DateTime     @default(now())
+}
+
+model Room {
+  id                String       @id @default(cuid())
+  roomCode          String       @unique
+  roomKeyHash       String
+  name              String       @default("Untitled Room")
+  showMembers       Boolean      @default(true)
+  compressedContent Bytes?
+  resetToken        String?
+  resetTokenExpiry  DateTime?
+  adminId           String
+  admin             User         @relation("RoomAdmin", fields: [adminId], references: [id])
+  members           RoomMember[]
+  invites           RoomInvite[]
+  pages             Page[]
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+}
+
+model Page {
+  id                String   @id @default(cuid())
+  roomId            String
+  title             String   @default("Page 1")
+  sortOrder         Int      @default(0)
+  compressedContent Bytes?
+  room              Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([roomId, sortOrder])
+  @@unique([roomId, sortOrder])
+}
+
+model RoomMember {
+  id       String       @id @default(cuid())
+  userId   String
+  roomId   String
+  status   MemberStatus @default(PENDING)
+  color    String?
+  user     User         @relation(fields: [userId], references: [id])
+  room     Room         @relation(fields: [roomId], references: [id])
+  joinedAt DateTime     @default(now())
+
+  @@unique([userId, roomId])
+}
+
+model RoomInvite {
+  id        String   @id @default(cuid())
+  roomId    String
+  email     String
+  createdAt DateTime @default(now())
+  room      Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+
+  @@unique([roomId, email])
+  @@index([roomId])
+}
+
+enum MemberStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}

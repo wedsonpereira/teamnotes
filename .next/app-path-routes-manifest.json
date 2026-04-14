@@ -1,0 +1,21 @@
+{
+  "/_global-error/page": "/_global-error",
+  "/_not-found/page": "/_not-found",
+  "/api/rooms/[roomId]/members/route": "/api/rooms/[roomId]/members",
+  "/api/rooms/[roomId]/pages/[pageId]/route": "/api/rooms/[roomId]/pages/[pageId]",
+  "/api/rooms/[roomId]/pages/route": "/api/rooms/[roomId]/pages",
+  "/api/rooms/[roomId]/route": "/api/rooms/[roomId]",
+  "/api/rooms/[roomId]/save/route": "/api/rooms/[roomId]/save",
+  "/api/rooms/[roomId]/settings/route": "/api/rooms/[roomId]/settings",
+  "/api/rooms/create/route": "/api/rooms/create",
+  "/api/rooms/forgot-key/route": "/api/rooms/forgot-key",
+  "/api/rooms/forgot-roomid/route": "/api/rooms/forgot-roomid",
+  "/api/rooms/invite/accept/route": "/api/rooms/invite/accept",
+  "/api/rooms/join/route": "/api/rooms/join",
+  "/api/rooms/reenter/route": "/api/rooms/reenter",
+  "/api/rooms/reset-key/[token]/route": "/api/rooms/reset-key/[token]",
+  "/favicon.ico/route": "/favicon.ico",
+  "/page": "/",
+  "/reset-key/[token]/page": "/reset-key/[token]",
+  "/room/[roomId]/page": "/room/[roomId]"
+}
