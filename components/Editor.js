@@ -1,8 +1,8 @@
 "use client";
 
 import { useEditor, EditorContent } from "@tiptap/react";
-import { Mark, Extension } from "@tiptap/core";
-import { Plugin, PluginKey, TextSelection } from "@tiptap/pm/state";
+import { Mark, Node, Extension } from "@tiptap/core";
+import { NodeSelection, Plugin, PluginKey, TextSelection } from "@tiptap/pm/state";
 import { Fragment, Slice } from "@tiptap/pm/model";
 import { dropPoint } from "@tiptap/pm/transform";
 import StarterKit from "@tiptap/starter-kit";
@@ -94,6 +94,143 @@ const ParagraphWithSpacing = Paragraph.extend({
     },
 });
 
+const Table = Node.create({
+    name: "table",
+    group: "block",
+    content: "tableRow+",
+    isolating: true,
+
+    addAttributes() {
+        return {
+            width: {
+                default: null,
+                parseHTML: (element) => {
+                    const rawWidth =
+                        element.getAttribute("data-table-width") ||
+                        element.style.width;
+                    const parsed = Number.parseFloat(String(rawWidth));
+                    return Number.isFinite(parsed) ? parsed : null;
+                },
+                renderHTML: (attrs) => {
+                    if (!attrs.width) return {};
+                    const width = Math.min(100, Math.max(20, Number(attrs.width)));
+                    return {
+                        "data-table-width": String(width),
+                    };
+                },
+            },
+            marginLeft: {
+                default: 0,
+                parseHTML: (element) => {
+                    const rawMargin =
+                        element.getAttribute("data-table-left") ||
+                        element.style.marginLeft;
+                    const parsed = Number.parseFloat(String(rawMargin));
+                    return Number.isFinite(parsed) ? parsed : 0;
+                },
+                renderHTML: (attrs) => ({
+                    "data-table-left": String(Math.max(0, Number(attrs.marginLeft) || 0)),
+                }),
+            },
+        };
+    },
+
+    parseHTML() {
+        return [{ tag: "table" }];
+    },
+
+    renderHTML({ HTMLAttributes }) {
+        const width = Number(HTMLAttributes["data-table-width"]);
+        const marginLeft = Math.max(0, Number(HTMLAttributes["data-table-left"]) || 0);
+        const styleParts = [];
+
+        if (Number.isFinite(width) && width > 0 && width <= 100) {
+            const safeWidth = Math.min(width, 100 - marginLeft);
+            styleParts.push(`width: ${safeWidth}%`);
+            styleParts.push(`max-width: ${safeWidth}%`);
+        }
+
+        if (marginLeft > 0) {
+            styleParts.push(`margin-left: ${marginLeft}%`);
+        }
+
+        const className = ["teamnote-table", HTMLAttributes.class]
+            .filter(Boolean)
+            .join(" ");
+        const style = [HTMLAttributes.style, ...styleParts]
+            .filter(Boolean)
+            .join("; ");
+
+        return [
+            "table",
+            {
+                ...HTMLAttributes,
+                class: className,
+                ...(style ? { style } : {}),
+            },
+            ["tbody", 0],
+        ];
+    },
+});
+
+const TableRow = Node.create({
+    name: "tableRow",
+    content: "tableCell+",
+
+    parseHTML() {
+        return [{ tag: "tr" }];
+    },
+
+    renderHTML({ HTMLAttributes }) {
+        return ["tr", HTMLAttributes, 0];
+    },
+});
+
+const TableCell = Node.create({
+    name: "tableCell",
+    content: "block+",
+    isolating: true,
+
+    addAttributes() {
+        return {
+            width: {
+                default: null,
+                parseHTML: (element) => {
+                    const rawWidth =
+                        element.getAttribute("data-col-width") ||
+                        element.style.width;
+                    const parsed = Number.parseFloat(String(rawWidth));
+                    return Number.isFinite(parsed) ? parsed : null;
+                },
+                renderHTML: (attrs) => {
+                    if (!attrs.width) return {};
+                    const width = Number(attrs.width);
+                    if (!Number.isFinite(width) || width <= 0 || width > 100) {
+                        return {};
+                    }
+
+                    const percentWidth = Math.min(100, Math.max(1, width));
+                    return {
+                        "data-col-width": String(percentWidth),
+                        style: `width: ${percentWidth}%;`,
+                    };
+                },
+            },
+        };
+    },
+
+    parseHTML() {
+        return [{ tag: "td" }, { tag: "th" }];
+    },
+
+    renderHTML({ HTMLAttributes }) {
+        const className = ["teamnote-table-cell", HTMLAttributes.class]
+            .filter(Boolean)
+            .join(" ");
+        return ["td", { ...HTMLAttributes, class: className }, 0];
+    },
+});
+
 /* ------------------------------------------------------------------ */
 /*  Author Track Plugin Key                                            */
 /* ------------------------------------------------------------------ */
@@ -103,6 +240,7 @@ const TYPING_STATUS_THROTTLE_MS = 80;
 const DEFAULT_HIGHLIGHT_COLOR = "#fff59d";
 const IMAGE_DRAG_MIME = "application/x-teamnote-image-pos";
 const IMAGE_DRAG_FALLBACK_KEY = "__teamnoteImageDragPos";
+const PAGE_TAB_DRAG_MIME = "application/x-teamnote-page-tab";
 const MENU_FONT_SIZES = [
     "default",
     "12",
@@ -169,6 +307,24 @@ function parseIntSafe(value) {
     return Number.isInteger(parsed) ? parsed : null;
 }
 
+function getReadableColorForBackground(backgroundColor) {
+    if (typeof backgroundColor !== "string") return null;
+
+    const trimmed = backgroundColor.trim();
+    const hexMatch = trimmed.match(/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/);
+    if (!hexMatch) return null;
+
+    const hex = hexMatch[1].length === 3
+        ? hexMatch[1].split("").map((char) => `${char}${char}`).join("")
+        : hexMatch[1];
+    const red = Number.parseInt(hex.slice(0, 2), 16);
+    const green = Number.parseInt(hex.slice(2, 4), 16);
+    const blue = Number.parseInt(hex.slice(4, 6), 16);
+    const luminance = (0.299 * red + 0.587 * green + 0.114 * blue) / 255;
+
+    return luminance > 0.58 ? "#111827" : "#ffffff";
+}
+
 function readDraggedImagePosFromEvent(event) {
     const fromTransfer = parseIntSafe(
         event?.dataTransfer?.getData(IMAGE_DRAG_MIME)
@@ -187,6 +343,389 @@ function clearDraggedImagePos() {
     if (typeof window !== "undefined") {
         delete window[IMAGE_DRAG_FALLBACK_KEY];
     }
+}
+
+function getTableCellDepth($pos) {
+    for (let depth = $pos.depth; depth > 0; depth -= 1) {
+        if ($pos.node(depth)?.type?.name === "tableCell") {
+            return depth;
+        }
+    }
+    return null;
+}
+
+function getTableDepth($pos) {
+    for (let depth = $pos.depth; depth > 0; depth -= 1) {
+        if ($pos.node(depth)?.type?.name === "table") {
+            return depth;
+        }
+    }
+    return null;
+}
+
+function moveSelectionToAdjacentTableCell(view, event) {
+    const { state } = view;
+    const cellDepth = getTableCellDepth(state.selection.$from);
+    const tableDepth = getTableDepth(state.selection.$from);
+
+    if (cellDepth === null || tableDepth === null) return false;
+
+    event.preventDefault();
+
+    const currentCellPos = state.selection.$from.before(cellDepth);
+    const tableStart = state.selection.$from.before(tableDepth);
+    const tableNode = state.selection.$from.node(tableDepth);
+    const cells = [];
+    tableNode.descendants((node, pos) => {
+        if (node.type.name === "tableCell") {
+            cells.push({ node, pos: tableStart + 1 + pos });
+        }
+    });
+
+    const currentIndex = cells.findIndex((cell) => cell.pos === currentCellPos);
+    if (currentIndex === -1) return true;
+
+    const nextIndex = event.shiftKey
+        ? Math.max(currentIndex - 1, 0)
+        : Math.min(currentIndex + 1, cells.length - 1);
+    const targetCell = cells[nextIndex];
+    if (!targetCell) return true;
+
+    const targetSelection = TextSelection.near(
+        state.doc.resolve(targetCell.pos + 1),
+        1
+    );
+    view.dispatch(state.tr.setSelection(targetSelection).scrollIntoView());
+    return true;
+}
+
+function getSelectedTableRange(selection) {
+    const selectedNode = selection?.node;
+    if (selectedNode?.type?.name === "table") {
+        return { from: selection.from, to: selection.to };
+    }
+
+    return null;
+}
+
+function deleteSelectedTable(view, event) {
+    const tableRange = getSelectedTableRange(view.state.selection);
+    if (!tableRange) return false;
+
+    event.preventDefault();
+    view.dispatch(
+        view.state.tr.delete(tableRange.from, tableRange.to).scrollIntoView()
+    );
+    return true;
+}
+
+function findTableCellFromEventTarget(target) {
+    if (!target || typeof target.closest !== "function") return null;
+    return target.closest("td.teamnote-table-cell");
+}
+
+function getTableCellsInColumn(tableElement, columnIndex) {
+    return Array.from(tableElement.querySelectorAll("tr"))
+        .map((row) => row.children[columnIndex])
+        .filter((cell) => cell?.matches?.("td.teamnote-table-cell"));
+}
+
+function getTableInfoFromCellDOM(view, cellDom) {
+    let domPos = null;
+    try {
+        domPos = view.posAtDOM(cellDom, 0);
+    } catch {
+        return null;
+    }
+
+    const docSize = view.state.doc.content.size;
+    if (!Number.isInteger(domPos) || domPos < 0 || domPos > docSize) {
+        return null;
+    }
+
+    const $pos = view.state.doc.resolve(domPos);
+    const tableDepth = getTableDepth($pos);
+    if (tableDepth !== null) {
+        const tablePos = $pos.before(tableDepth);
+        const tableNode = view.state.doc.nodeAt(tablePos);
+        if (tableNode?.type?.name === "table") {
+            return { tablePos, tableNode };
+        }
+    }
+
+    const cellDepth = getTableCellDepth($pos);
+    if (cellDepth !== null) {
+        const cellPos = $pos.before(cellDepth);
+        const $cellPos = view.state.doc.resolve(cellPos);
+        const fallbackTableDepth = getTableDepth($cellPos);
+        if (fallbackTableDepth !== null) {
+            const tablePos = $cellPos.before(fallbackTableDepth);
+            const tableNode = view.state.doc.nodeAt(tablePos);
+            if (tableNode?.type?.name === "table") {
+                return { tablePos, tableNode };
+            }
+        }
+    }
+
+    if (cellDom.firstChild) {
+        try {
+            const childPos = view.posAtDOM(cellDom.firstChild, 0);
+            const $childPos = view.state.doc.resolve(
+                clampNumber(childPos, 0, view.state.doc.content.size)
+            );
+            const fallbackTableDepth = getTableDepth($childPos);
+            if (fallbackTableDepth !== null) {
+                const tablePos = $childPos.before(fallbackTableDepth);
+                const tableNode = view.state.doc.nodeAt(tablePos);
+                if (tableNode?.type?.name === "table") {
+                    return { tablePos, tableNode };
+                }
+            }
+        } catch {
+            return null;
+        }
+    }
+
+    return null;
+}
+
+function getColumnCellPositions(tableNode, tablePos, columnIndex) {
+    const positions = [];
+
+    tableNode.forEach((rowNode, rowOffset) => {
+        if (rowNode.type.name !== "tableRow") return;
+
+        const rowPos = tablePos + 1 + rowOffset;
+        rowNode.forEach((cellNode, cellOffset, cellIndex) => {
+            if (
+                cellIndex === columnIndex &&
+                cellNode.type.name === "tableCell"
+            ) {
+                positions.push(rowPos + 1 + cellOffset);
+            }
+        });
+    });
+
+    return positions;
+}
+
+function getAllColumnCellPositions(tableNode, tablePos) {
+    const columns = [];
+
+    tableNode.forEach((rowNode, rowOffset) => {
+        if (rowNode.type.name !== "tableRow") return;
+
+        const rowPos = tablePos + 1 + rowOffset;
+        rowNode.forEach((cellNode, cellOffset, cellIndex) => {
+            if (cellNode.type.name !== "tableCell") return;
+            if (!columns[cellIndex]) columns[cellIndex] = [];
+            columns[cellIndex].push(rowPos + 1 + cellOffset);
+        });
+    });
+
+    return columns;
+}
+
+function clampNumber(value, min, max) {
+    return Math.min(max, Math.max(min, value));
+}
+
+function getTableContainerWidth(view) {
+    const editorRect = view.dom?.getBoundingClientRect?.();
+    return editorRect?.width || 1;
+}
+
+function getTableWidthPercent(table, view) {
+    const containerWidth = getTableContainerWidth(view);
+    return clampNumber(
+        (table.getBoundingClientRect().width / containerWidth) * 100,
+        20,
+        100
+    );
+}
+
+function updateTableNodeAttrs(view, tablePos, attrs) {
+    const tableNode = view.state.doc.nodeAt(tablePos);
+    if (tableNode?.type?.name !== "table") return false;
+
+    view.dispatch(
+        view.state.tr.setNodeMarkup(tablePos, undefined, {
+            ...tableNode.attrs,
+            ...attrs,
+        })
+    );
+    return true;
+}
+
+function startWholeTableResize(view, event, table, tablePos, tableNode) {
+    const startX = event.clientX;
+    const containerWidth = getTableContainerWidth(view);
+    const startWidth = Number(tableNode.attrs.width) || getTableWidthPercent(table, view);
+    const marginLeft = Math.max(0, Number(tableNode.attrs.marginLeft) || 0);
+    const maxWidth = Math.max(20, 100 - marginLeft);
+
+    const handleMouseMove = (moveEvent) => {
+        moveEvent.preventDefault();
+        const deltaPercent = ((moveEvent.clientX - startX) / containerWidth) * 100;
+        const nextWidth = Number(
+            clampNumber(startWidth + deltaPercent, 20, maxWidth).toFixed(2)
+        );
+        updateTableNodeAttrs(view, tablePos, { width: nextWidth });
+    };
+
+    const handleMouseUp = () => {
+        document.removeEventListener("mousemove", handleMouseMove);
+        document.removeEventListener("mouseup", handleMouseUp);
+        document.body.classList.remove("table-whole-resizing");
+    };
+
+    document.body.classList.add("table-whole-resizing");
+    document.addEventListener("mousemove", handleMouseMove);
+    document.addEventListener("mouseup", handleMouseUp);
+}
+
+function startWholeTableMove(view, event, table, tablePos, tableNode) {
+    const startX = event.clientX;
+    const containerWidth = getTableContainerWidth(view);
+    const startLeft = Math.max(0, Number(tableNode.attrs.marginLeft) || 0);
+    const tableWidth = Number(tableNode.attrs.width) || getTableWidthPercent(table, view);
+    const maxLeft = Math.max(0, 100 - tableWidth);
+
+    const handleMouseMove = (moveEvent) => {
+        moveEvent.preventDefault();
+        const deltaPercent = ((moveEvent.clientX - startX) / containerWidth) * 100;
+        const nextLeft = Number(
+            clampNumber(startLeft + deltaPercent, 0, maxLeft).toFixed(2)
+        );
+        updateTableNodeAttrs(view, tablePos, { marginLeft: nextLeft });
+    };
+
+    const handleMouseUp = () => {
+        document.removeEventListener("mousemove", handleMouseMove);
+        document.removeEventListener("mouseup", handleMouseUp);
+        document.body.classList.remove("table-whole-moving");
+    };
+
+    document.body.classList.add("table-whole-moving");
+    document.addEventListener("mousemove", handleMouseMove);
+    document.addEventListener("mouseup", handleMouseUp);
+}
+
+function maybeStartTablePointerAction(view, event) {
+    const cell = findTableCellFromEventTarget(event.target);
+    if (!cell) return false;
+
+    const table = cell.closest("table.teamnote-table");
+    if (!table) return false;
+
+    const tableInfo = getTableInfoFromCellDOM(view, cell);
+    if (!tableInfo) return false;
+    const { tablePos, tableNode } = tableInfo;
+    const tableRect = table.getBoundingClientRect();
+    const handleSize = 18;
+    const isMoveHandle =
+        event.clientX - tableRect.left <= handleSize &&
+        event.clientY - tableRect.top <= handleSize;
+    const isResizeHandle =
+        tableRect.right - event.clientX <= handleSize &&
+        tableRect.bottom - event.clientY <= handleSize;
+
+    if (isMoveHandle) {
+        event.preventDefault();
+        view.dispatch(
+            view.state.tr
+                .setSelection(NodeSelection.create(view.state.doc, tablePos))
+                .scrollIntoView()
+        );
+        startWholeTableMove(view, event, table, tablePos, tableNode);
+        return true;
+    }
+
+    if (isResizeHandle) {
+        event.preventDefault();
+        startWholeTableResize(view, event, table, tablePos, tableNode);
+        return true;
+    }
+
+    const rect = cell.getBoundingClientRect();
+    const resizeZoneWidth = 12;
+    const isNearRightEdge = rect.right - event.clientX <= resizeZoneWidth;
+    if (!isNearRightEdge) return false;
+
+    event.preventDefault();
+    const columnIndex = cell.cellIndex;
+    const columnCells = getTableCellsInColumn(table, columnIndex);
+
+    const columnCellPositions = getColumnCellPositions(
+        tableNode,
+        tablePos,
+        columnIndex
+    );
+    if (!columnCellPositions.length) return false;
+    const allColumnPositions = getAllColumnCellPositions(tableNode, tablePos);
+
+    const startX = event.clientX;
+    const totalColumns = table.rows[0]?.cells?.length || columnCells.length || 1;
+    const tableWidth = table.getBoundingClientRect().width;
+    if (!tableWidth) return false;
+
+    const firstRowCells = Array.from(table.rows[0]?.cells || []);
+    const startPercents = firstRowCells.map((columnCell) =>
+        (columnCell.getBoundingClientRect().width / tableWidth) * 100
+    );
+    const resizeNeighborIndex =
+        columnIndex < totalColumns - 1 ? columnIndex + 1 : columnIndex - 1;
+    const minColumnPercent = Math.max(4, (100 / Math.max(totalColumns, 1)) * 0.35);
+
+    const handleMouseMove = (moveEvent) => {
+        moveEvent.preventDefault();
+        const deltaPercent = ((moveEvent.clientX - startX) / tableWidth) * 100;
+        const tr = view.state.tr;
+        const nextPercents = [...startPercents];
+
+        if (resizeNeighborIndex >= 0) {
+            const sharedWidth =
+                startPercents[columnIndex] + startPercents[resizeNeighborIndex];
+            nextPercents[columnIndex] = clampNumber(
+                startPercents[columnIndex] + deltaPercent,
+                minColumnPercent,
+                sharedWidth - minColumnPercent
+            );
+            nextPercents[resizeNeighborIndex] =
+                sharedWidth - nextPercents[columnIndex];
+        } else {
+            nextPercents[columnIndex] = 100;
+        }
+
+        allColumnPositions.forEach((positions, index) => {
+            const nextWidth = Number(nextPercents[index]?.toFixed(2));
+            if (!Number.isFinite(nextWidth)) return;
+
+            positions.forEach((pos) => {
+                const node = view.state.doc.nodeAt(pos);
+                if (node?.type?.name !== "tableCell") return;
+                tr.setNodeMarkup(pos, undefined, {
+                    ...node.attrs,
+                    width: nextWidth,
+                });
+            });
+        });
+
+        if (tr.docChanged) {
+            view.dispatch(tr);
+        }
+    };
+
+    const handleMouseUp = () => {
+        document.removeEventListener("mousemove", handleMouseMove);
+        document.removeEventListener("mouseup", handleMouseUp);
+        document.body.classList.remove("table-column-resizing");
+    };
+
+    document.body.classList.add("table-column-resizing");
+    document.addEventListener("mousemove", handleMouseMove);
+    document.addEventListener("mouseup", handleMouseUp);
+    return true;
 }
 
 function getDropPosNearTargetImage(view, event) {
@@ -621,7 +1160,7 @@ export default function Editor({
     const savedSelectionRef = useRef(null);
     const contextMenuRef = useRef(null);
     const [showContextMenu, setShowContextMenu] = useState(false);
-    const [contextMenuPosition, setContextMenuPosition] = useState({
+    const [contextMenuPosition] = useState({
         top: 0,
         left: 0,
     });
@@ -728,6 +1267,9 @@ export default function Editor({
             Highlight.configure({
                 multicolor: true,
             }),
+            Table,
+            TableRow,
+            TableCell,
             ResizableImage,
             FileAttachment,
             Placeholder.configure({
@@ -756,7 +1298,19 @@ export default function Editor({
             attributes: {
                 class: "tiptap",
             },
+            handleDOMEvents: {
+                mousedown: (view, event) =>
+                    maybeStartTablePointerAction(view, event),
+            },
             handleKeyDown: (view, event) => {
+                if (event.key === "Backspace" || event.key === "Delete") {
+                    if (deleteSelectedTable(view, event)) return true;
+                }
+
+                if (event.key === "Tab") {
+                    return moveSelectionToAdjacentTableCell(view, event);
+                }
+
                 const selection = view.state.selection;
                 const selectedNode = selection?.node;
                 if (!selectedNode) return false;
@@ -922,6 +1476,13 @@ export default function Editor({
                 return true;
             },
             handleDrop: (view, event) => {
+                const dragTypes = Array.from(event?.dataTransfer?.types || []);
+                if (dragTypes.includes(PAGE_TAB_DRAG_MIME)) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    return true;
+                }
+
                 const imageDragSourcePos = readDraggedImagePosFromEvent(event);
 
                 if (Number.isInteger(imageDragSourcePos)) {
@@ -997,6 +1558,12 @@ export default function Editor({
             },
         },
     });
+
+    const editorContrastColor = useMemo(
+        () => getReadableColorForBackground(editorBg),
+        [editorBg]
+    );
+    const effectiveFontColor = editorContrastColor || fontColor;
 
     // Keep editorRef in sync so insertFiles can use TipTap commands.
     useEffect(() => {
@@ -1086,33 +1653,10 @@ export default function Editor({
         []
     );
 
-    const handleContextMenu = useCallback(
-        (event) => {
-            if (!editor) return;
-            event.preventDefault();
-
-            const { from, to } = editor.state.selection;
-            savedSelectionRef.current = { from, to };
-
-            const menuWidth = 320;
-            const menuHeight = 620;
-            const nextLeft = Math.min(
-                event.clientX,
-                window.innerWidth - menuWidth - 8
-            );
-            const nextTop = Math.min(
-                event.clientY,
-                window.innerHeight - menuHeight - 8
-            );
-
-            setContextMenuPosition({
-                left: Math.max(8, nextLeft),
-                top: Math.max(8, nextTop),
-            });
-            setShowContextMenu(true);
-        },
-        [editor]
-    );
+    const handleContextMenu = useCallback(() => {
+        // Keep native browser context menu on right-click.
+        setShowContextMenu(false);
+    }, []);
 
     const runFormatCommand = useCallback(
         (runner) => {
@@ -1578,7 +2122,12 @@ export default function Editor({
                 className={`editor-content ${showLineNumbers ? "show-line-numbers" : ""}`}
                 style={{
                     ...(editorBg ? { background: editorBg } : {}),
-                    ...(fontColor ? { color: fontColor } : {}),
+                    ...(effectiveFontColor ? { color: effectiveFontColor } : {}),
+                    ...(editorContrastColor ? {
+                        "--table-border-color": editorContrastColor,
+                        "--editor-contrast-color": editorContrastColor,
+                        "--editor-background-color": editorBg,
+                    } : {}),
                 }}
                 onContextMenu={handleContextMenu}
             >

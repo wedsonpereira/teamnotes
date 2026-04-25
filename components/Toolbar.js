@@ -72,6 +72,52 @@ const PARAGRAPH_LINE_SPACING_OPTIONS = [
 ];
 const DEFAULT_HIGHLIGHT_COLOR = "#fff59d";
 const DEFAULT_IMAGE_INSERT_WIDTH = 420;
+const MAX_TABLE_ROWS = 20;
+const MAX_TABLE_COLUMNS = 12;
+const TABLE_PICKER_ROWS = 8;
+const TABLE_PICKER_COLUMNS = 8;
+
+const TOOLTIP_DESCRIPTIONS = {
+    "Delete Table": "Remove the selected table from the page.",
+    "Font Family": "Choose the typeface for selected text.",
+    "Font Size": "Change the size of selected text.",
+    "Heading 1": "Make selected text a large section title.",
+    "Heading 2": "Make selected text a medium section title.",
+    "Heading 3": "Make selected text a smaller section title.",
+    Bold: "Make selected text thicker.",
+    Italic: "Slant selected text for emphasis.",
+    Underline: "Add a line under selected text.",
+    Strikethrough: "Draw a line through selected text.",
+    "Reset Text Color": "Remove the custom text color.",
+    "Text Color": "Pick a color for selected text.",
+    "Highlight Text": "Add highlight color behind selected text.",
+    "Remove Highlight": "Remove highlight from selected text.",
+    "Highlight Color": "Choose the color used for text highlighting.",
+    "Paragraph Line Spacing": "Adjust spacing between lines in the paragraph.",
+    "Remove Space After Paragraph": "Keep paragraphs closer together.",
+    "Add Space After Paragraph": "Restore space after paragraphs.",
+    "Bullet List": "Turn selected lines into a bulleted list.",
+    "Ordered List": "Turn selected lines into a numbered list.",
+    Blockquote: "Format selected text as a quotation.",
+    "Code Block": "Format selected text as a code block.",
+    "Insert Image": "Add one or more images to the note.",
+    "Attach File": "Attach a file or image to the note.",
+    "Insert Table": "Create a table with custom rows and columns.",
+    "Insert Emoji": "Add an emoji at the cursor.",
+    "Horizontal Rule": "Insert a divider line.",
+    Undo: "Reverse the last editor change.",
+    Redo: "Restore the last undone change.",
+    "Light Mode": "Switch the interface to light theme.",
+    "Dark Mode": "Switch the interface to dark theme.",
+    "More Tools": "Open extra toolbar controls on small screens.",
+    "Advanced Options": "Open theme, font, and notepad settings.",
+    "Primary Accent": "Change the main interface accent color.",
+    "Secondary Accent": "Change the secondary accent color.",
+    "Interface Font": "Change the font used by the app interface.",
+    "Line Numbers": "Show or hide line numbers in the editor.",
+    "Notepad Background": "Change the editor page background color.",
+    "Font Color": "Set the default note text color.",
+};
 
 const EMOJI_LIST = [
     "😀", "😁", "😂", "🤣", "😊", "😍", "🤩", "😎", "🤔", "😴", "😭", "🤯",
@@ -79,18 +125,62 @@ const EMOJI_LIST = [
     "📎", "📁", "📝", "📣", "⚡", "🌟", "💬", "❤️", "🎯", "📊", "⌛", "👀",
 ];
 
+function describeTool(tip) {
+    if (!tip) return "";
+    const description = TOOLTIP_DESCRIPTIONS[tip];
+    return description ? `${tip}: ${description}` : tip;
+}
+
+function getTooltipParts(tip) {
+    if (!tip) return { title: "", description: "" };
+    return {
+        title: tip,
+        description: TOOLTIP_DESCRIPTIONS[tip] || "",
+    };
+}
+
+function RichTooltipContent({ tip }) {
+    const { title, description } = getTooltipParts(tip);
+
+    if (!title) return null;
+
+    return (
+        <span className="rich-tooltip" role="tooltip">
+            <span className="rich-tooltip-title">{title}</span>
+            {description && (
+                <span className="rich-tooltip-text">{description}</span>
+            )}
+        </span>
+    );
+}
+
 function TipBtn({ tip, className, onClick, onMouseDown, children, style }) {
+    const describedTip = describeTool(tip);
+
     return (
         <button
             className={`${className || ""} has-tooltip`}
-            data-tip={tip}
+            data-tip={describedTip}
+            aria-label={describedTip}
             onClick={onClick}
             onMouseDown={onMouseDown}
             type="button"
             style={style}
         >
             {children}
+            <RichTooltipContent tip={tip} />
         </button>
+    );
+}
+
+function RichTipWrap({ tip, children }) {
+    const describedTip = describeTool(tip);
+
+    return (
+        <span className="toolbar-tooltip-wrap has-tooltip" aria-label={describedTip}>
+            {children}
+            <RichTooltipContent tip={tip} />
+        </span>
     );
 }
 
@@ -173,6 +263,11 @@ export default function Toolbar({
     const [paragraphNoSpaceAfter, setParagraphNoSpaceAfter] = useState(false);
     const [isCompactToolbar, setIsCompactToolbar] = useState(false);
     const [showCompactMenu, setShowCompactMenu] = useState(false);
+    const [showTablePicker, setShowTablePicker] = useState(false);
+    const [tablePosition, setTablePosition] = useState({ top: 0, left: 0 });
+    const [tableRows, setTableRows] = useState(3);
+    const [tableColumns, setTableColumns] = useState(3);
+    const [activeTableRange, setActiveTableRange] = useState(null);
 
     const dropdownRef = useRef(null);
     const advancedBtnRef = useRef(null);
@@ -182,6 +277,9 @@ export default function Toolbar({
     const emojiRef = useRef(null);
     const emojiBtnRef = useRef(null);
     const emojiPortalRef = useRef(null);
+    const tableRef = useRef(null);
+    const tableBtnRef = useRef(null);
+    const tablePortalRef = useRef(null);
     const imageInputRef = useRef(null);
     const fileInputRef = useRef(null);
     const savedSelectionRef = useRef(null);
@@ -191,6 +289,27 @@ export default function Toolbar({
             const { from, to } = editor.state.selection;
             savedSelectionRef.current = { from, to };
         }
+    }, [editor]);
+
+    const getActiveTableRange = useCallback((editorInstance = editor) => {
+        const selection = editorInstance?.state?.selection;
+        if (!selection) return null;
+
+        if (selection.node?.type?.name === "table") {
+            return { from: selection.from, to: selection.to };
+        }
+
+        const $from = selection.$from;
+        for (let depth = $from.depth; depth > 0; depth -= 1) {
+            if ($from.node(depth)?.type?.name === "table") {
+                return {
+                    from: $from.before(depth),
+                    to: $from.after(depth),
+                };
+            }
+        }
+
+        return null;
     }, [editor]);
 
     useEffect(() => {
@@ -260,6 +379,12 @@ export default function Toolbar({
             ) {
                 setShowEmojiPicker(false);
             }
+            if (
+                tableRef.current && !tableRef.current.contains(target) &&
+                (!tablePortalRef.current || !tablePortalRef.current.contains(target))
+            ) {
+                setShowTablePicker(false);
+            }
         };
 
         document.addEventListener("mousedown", handleClick);
@@ -274,10 +399,12 @@ export default function Toolbar({
             setActiveTextColor(DEFAULT_TEXT_COLOR);
             setActiveParagraphLineSpacing("default");
             setParagraphNoSpaceAfter(false);
+            setActiveTableRange(null);
             return;
         }
 
         const syncTypography = () => {
+            setActiveTableRange(getActiveTableRange(editor));
             const attrs = editor.getAttributes("textStyle") || {};
             const knownFont = TEXT_FONT_OPTIONS.some(
                 (option) => option.value === attrs.fontFamily
@@ -321,7 +448,7 @@ export default function Toolbar({
             editor.off("selectionUpdate", syncTypography);
             editor.off("transaction", syncTypography);
         };
-    }, [editor]);
+    }, [editor, getActiveTableRange]);
 
     const btn = useCallback(
         (iconClass, command, isActive, tip) => (
@@ -353,6 +480,17 @@ export default function Toolbar({
         setShowEmojiPicker((prev) => !prev);
     };
 
+    const openTablePickerFromAnchor = (anchorElement) => {
+        if (!anchorElement) return;
+        const rect = anchorElement.getBoundingClientRect();
+        setTablePosition({
+            top: rect.bottom + 8,
+            left: Math.min(rect.left, window.innerWidth - 292),
+        });
+        setShowTablePicker((prev) => !prev);
+        setShowEmojiPicker(false);
+    };
+
     const openAdvancedFromAnchor = (anchorElement) => {
         if (!anchorElement) return;
 
@@ -370,6 +508,56 @@ export default function Toolbar({
         if (!editor) return;
         editor.chain().focus().insertContent(emoji).run();
         setShowEmojiPicker(false);
+    };
+
+    const clampTableSize = (value, max) => {
+        const parsed = Number.parseInt(String(value), 10);
+        if (!Number.isFinite(parsed)) return 1;
+        return Math.min(Math.max(parsed, 1), max);
+    };
+
+    const insertTable = (rows = tableRows, columns = tableColumns) => {
+        if (!editor) return;
+
+        const rowCount = clampTableSize(rows, MAX_TABLE_ROWS);
+        const columnCount = clampTableSize(columns, MAX_TABLE_COLUMNS);
+        const tableContent = {
+            type: "table",
+            content: Array.from({ length: rowCount }, () => ({
+                type: "tableRow",
+                content: Array.from({ length: columnCount }, () => ({
+                    type: "tableCell",
+                    content: [{ type: "paragraph" }],
+                })),
+            })),
+        };
+        const contentToInsert = [tableContent, { type: "paragraph" }];
+        const insertPos = getInsertPosAfterSelectedMediaNode(editor);
+        const chain = editor.chain().focus();
+
+        if (typeof insertPos === "number") {
+            chain.insertContentAt(insertPos, contentToInsert).run();
+        } else {
+            chain.insertContent(contentToInsert).run();
+        }
+
+        setTableRows(rowCount);
+        setTableColumns(columnCount);
+        setShowTablePicker(false);
+        setShowCompactMenu(false);
+    };
+
+    const deleteActiveTable = () => {
+        if (!editor) return;
+        const tableRange = getActiveTableRange(editor);
+        if (!tableRange) return;
+
+        editor
+            .chain()
+            .focus()
+            .deleteRange(tableRange)
+            .run();
+        setActiveTableRange(null);
     };
 
     const applyFontFamily = (fontFamilyValue) => {
@@ -705,114 +893,58 @@ export default function Toolbar({
                 ref={primaryToolbarRef}
                 className={`toolbar-primary ${isCompactToolbar ? "toolbar-primary-compact" : ""}`}
             >
-                <div className="toolbar-group">
-                    {btn("fa-solid fa-bold", (e) => e.chain().focus().toggleBold().run(), editor?.isActive("bold"), "Bold")}
-                    {btn("fa-solid fa-italic", (e) => e.chain().focus().toggleItalic().run(), editor?.isActive("italic"), "Italic")}
-                    {btn("fa-solid fa-underline", (e) => e.chain().focus().toggleUnderline().run(), editor?.isActive("underline"), "Underline")}
-                    {btn("fa-solid fa-strikethrough", (e) => e.chain().focus().toggleStrike().run(), editor?.isActive("strike"), "Strikethrough")}
-                    <TipBtn
-                        tip={editor?.isActive("highlight") ? "Remove Highlight" : "Highlight Text"}
-                        className={`toolbar-btn ${editor?.isActive("highlight") ? "active" : ""}`}
-                        onMouseDown={saveEditorSelection}
-                        onClick={toggleHighlight}
-                    >
-                        <i className="fa-solid fa-highlighter" />
-                    </TipBtn>
-                    <input
-                        type="color"
-                        className="toolbar-color-input toolbar-highlight-color"
-                        value={activeHighlightColor}
-                        onMouseDown={saveEditorSelection}
-                        onFocus={saveEditorSelection}
-                        onChange={(e) => applyHighlightColor(e.target.value)}
-                        title="Highlight color"
-                    />
-                    <TipBtn
-                        tip="Reset Text Color"
-                        className="toolbar-btn"
-                        onMouseDown={saveEditorSelection}
-                        onClick={clearTextColor}
-                    >
-                        <span
-                            className="toolbar-text-color-indicator"
-                            style={{ "--toolbar-text-color": activeTextColor }}
-                        >
-                            A
-                        </span>
-                    </TipBtn>
-                    <input
-                        type="color"
-                        className="toolbar-color-input toolbar-text-color"
-                        value={activeTextColor}
-                        onMouseDown={saveEditorSelection}
-                        onFocus={saveEditorSelection}
-                        onChange={(e) => applyTextColor(e.target.value)}
-                        title="Text color"
-                    />
-                </div>
-
-                <div className="toolbar-divider" />
-
-                <div className="toolbar-group">
-                    <select
-                        className="toolbar-select"
-                        value={activeFontFamily}
-                        onMouseDown={saveEditorSelection}
-                        onFocus={saveEditorSelection}
-                        onChange={(e) => applyFontFamily(e.target.value)}
-                        title="Font family"
-                    >
-                        {TEXT_FONT_OPTIONS.map((option) => (
-                            <option key={option.label} value={option.value}>
-                                {option.label}
-                            </option>
-                        ))}
-                    </select>
-
-                    <select
-                        className="toolbar-select toolbar-select-size"
-                        value={activeFontSize}
-                        onMouseDown={saveEditorSelection}
-                        onFocus={saveEditorSelection}
-                        onChange={(e) => applyFontSize(e.target.value)}
-                        title="Font size"
-                    >
-                        <option value="default">Size</option>
-                        {FONT_SIZES.map((size) => (
-                            <option key={size} value={size}>
-                                {size}px
-                            </option>
-                        ))}
-                    </select>
-
-                    {!isCompactToolbar && (
-                        <>
-                            <select
-                                className="toolbar-select toolbar-select-spacing"
-                                value={activeParagraphLineSpacing}
-                                onMouseDown={saveEditorSelection}
-                                onFocus={saveEditorSelection}
-                                onChange={(e) => applyParagraphLineSpacing(e.target.value)}
-                                title="Paragraph line spacing"
-                            >
-                                {PARAGRAPH_LINE_SPACING_OPTIONS.map((option) => (
-                                    <option key={option.value} value={option.value}>
-                                        {option.label}
-                                    </option>
-                                ))}
-                            </select>
-
+                {activeTableRange && (
+                    <>
+                        <div className="toolbar-group">
                             <TipBtn
-                                tip={paragraphNoSpaceAfter ? "Add Space After Paragraph" : "Remove Space After Paragraph"}
-                                className={`toolbar-btn ${paragraphNoSpaceAfter ? "active" : ""}`}
-                                onMouseDown={saveEditorSelection}
-                                onClick={toggleParagraphSpaceAfter}
+                                tip="Delete Table"
+                                className="toolbar-btn danger"
+                                onClick={deleteActiveTable}
                             >
-                                <i className="fa-solid fa-text-height" />
+                                <i className="fa-solid fa-table-cells-large" />
                             </TipBtn>
-                        </>
-                    )}
-                </div>
+                        </div>
+
+                        <div className="toolbar-divider" />
+                    </>
+                )}
+
+	                <div className="toolbar-group toolbar-group-font">
+	                    <RichTipWrap tip="Font Family">
+	                        <select
+	                            className="toolbar-select"
+	                            value={activeFontFamily}
+	                            onMouseDown={saveEditorSelection}
+	                            onFocus={saveEditorSelection}
+	                            onChange={(e) => applyFontFamily(e.target.value)}
+	                            aria-label={describeTool("Font Family")}
+	                        >
+	                            {TEXT_FONT_OPTIONS.map((option) => (
+	                                <option key={option.label} value={option.value}>
+	                                    {option.label}
+	                                </option>
+	                            ))}
+	                        </select>
+	                    </RichTipWrap>
+
+	                    <RichTipWrap tip="Font Size">
+	                        <select
+	                            className="toolbar-select toolbar-select-size"
+	                            value={activeFontSize}
+	                            onMouseDown={saveEditorSelection}
+	                            onFocus={saveEditorSelection}
+	                            onChange={(e) => applyFontSize(e.target.value)}
+	                            aria-label={describeTool("Font Size")}
+	                        >
+	                            <option value="default">Size</option>
+	                            {FONT_SIZES.map((size) => (
+	                                <option key={size} value={size}>
+	                                    {size}px
+	                                </option>
+	                            ))}
+	                        </select>
+	                    </RichTipWrap>
+	                </div>
 
                 {!isCompactToolbar && (
                     <>
@@ -845,6 +977,82 @@ export default function Toolbar({
                         <div className="toolbar-divider" />
 
                         <div className="toolbar-group">
+                            {btn("fa-solid fa-bold", (e) => e.chain().focus().toggleBold().run(), editor?.isActive("bold"), "Bold")}
+                            {btn("fa-solid fa-italic", (e) => e.chain().focus().toggleItalic().run(), editor?.isActive("italic"), "Italic")}
+                            {btn("fa-solid fa-underline", (e) => e.chain().focus().toggleUnderline().run(), editor?.isActive("underline"), "Underline")}
+                            {btn("fa-solid fa-strikethrough", (e) => e.chain().focus().toggleStrike().run(), editor?.isActive("strike"), "Strikethrough")}
+                            <TipBtn
+                                tip="Reset Text Color"
+                                className="toolbar-btn"
+                                onMouseDown={saveEditorSelection}
+                                onClick={clearTextColor}
+                            >
+                                <span
+                                    className="toolbar-text-color-indicator"
+                                    style={{ "--toolbar-text-color": activeTextColor }}
+                                >
+                                    A
+                                </span>
+                            </TipBtn>
+	                            <RichTipWrap tip="Text Color">
+	                                <input
+	                                    type="color"
+	                                    className="toolbar-color-input toolbar-text-color"
+	                                    value={activeTextColor}
+	                                    onMouseDown={saveEditorSelection}
+	                                    onFocus={saveEditorSelection}
+	                                    onChange={(e) => applyTextColor(e.target.value)}
+	                                    aria-label={describeTool("Text Color")}
+	                                />
+	                            </RichTipWrap>
+                            <TipBtn
+                                tip={editor?.isActive("highlight") ? "Remove Highlight" : "Highlight Text"}
+                                className={`toolbar-btn ${editor?.isActive("highlight") ? "active" : ""}`}
+                                onMouseDown={saveEditorSelection}
+                                onClick={toggleHighlight}
+                            >
+                                <i className="fa-solid fa-highlighter" />
+                            </TipBtn>
+	                            <RichTipWrap tip="Highlight Color">
+	                                <input
+	                                    type="color"
+	                                    className="toolbar-color-input toolbar-highlight-color"
+	                                    value={activeHighlightColor}
+	                                    onMouseDown={saveEditorSelection}
+	                                    onFocus={saveEditorSelection}
+	                                    onChange={(e) => applyHighlightColor(e.target.value)}
+	                                    aria-label={describeTool("Highlight Color")}
+	                                />
+	                            </RichTipWrap>
+                        </div>
+
+                        <div className="toolbar-divider" />
+
+                        <div className="toolbar-group">
+	                            <RichTipWrap tip="Paragraph Line Spacing">
+	                                <select
+	                                    className="toolbar-select toolbar-select-spacing"
+	                                    value={activeParagraphLineSpacing}
+	                                    onMouseDown={saveEditorSelection}
+	                                    onFocus={saveEditorSelection}
+	                                    onChange={(e) => applyParagraphLineSpacing(e.target.value)}
+	                                    aria-label={describeTool("Paragraph Line Spacing")}
+	                                >
+	                                    {PARAGRAPH_LINE_SPACING_OPTIONS.map((option) => (
+	                                        <option key={option.value} value={option.value}>
+	                                            {option.label}
+	                                        </option>
+	                                    ))}
+	                                </select>
+	                            </RichTipWrap>
+                            <TipBtn
+                                tip={paragraphNoSpaceAfter ? "Add Space After Paragraph" : "Remove Space After Paragraph"}
+                                className={`toolbar-btn ${paragraphNoSpaceAfter ? "active" : ""}`}
+                                onMouseDown={saveEditorSelection}
+                                onClick={toggleParagraphSpaceAfter}
+                            >
+                                <i className="fa-solid fa-text-height" />
+                            </TipBtn>
                             {btn("fa-solid fa-list-ul", (e) => e.chain().focus().toggleBulletList().run(), editor?.isActive("bulletList"), "Bullet List")}
                             {btn("fa-solid fa-list-ol", (e) => e.chain().focus().toggleOrderedList().run(), editor?.isActive("orderedList"), "Ordered List")}
                             {btn("fa-solid fa-quote-left", (e) => e.chain().focus().toggleBlockquote().run(), editor?.isActive("blockquote"), "Blockquote")}
@@ -868,6 +1076,21 @@ export default function Toolbar({
                             <TipBtn tip="Attach File" className="toolbar-btn" onClick={addFile}>
                                 <i className="fa-solid fa-paperclip" />
                             </TipBtn>
+
+                            <div className="table-picker-wrapper" ref={tableRef}>
+                                <span ref={tableBtnRef} style={{ display: "inline-flex" }}>
+                                    <TipBtn
+                                        tip="Insert Table"
+                                        className={`toolbar-btn ${showTablePicker ? "active" : ""}`}
+                                        onClick={(event) => {
+                                            event.stopPropagation();
+                                            openTablePickerFromAnchor(event.currentTarget);
+                                        }}
+                                    >
+                                        <i className="fa-solid fa-table-cells" />
+                                    </TipBtn>
+                                </span>
+                            </div>
 
                             <div className="emoji-picker-wrapper" ref={emojiRef}>
                                 <span ref={emojiBtnRef} style={{ display: "inline-flex" }}>
@@ -902,11 +1125,6 @@ export default function Toolbar({
                             <TipBtn tip="Redo" className="toolbar-btn" onClick={() => editor?.chain().focus().redo().run()}>
                                 <i className="fa-solid fa-rotate-right" />
                             </TipBtn>
-                        </div>
-
-                        <div className="toolbar-divider" />
-
-                        <div className="toolbar-group">
                             <TipBtn
                                 tip={theme === "dark" ? "Light Mode" : "Dark Mode"}
                                 className="theme-toggle-btn"
@@ -934,20 +1152,22 @@ export default function Toolbar({
                         {showCompactMenu && (
                             <div className="toolbar-compact-menu">
                                 <div className="toolbar-compact-row">
-                                    <select
-                                        className="toolbar-select toolbar-select-spacing"
-                                        value={activeParagraphLineSpacing}
-                                        onMouseDown={saveEditorSelection}
-                                        onFocus={saveEditorSelection}
-                                        onChange={(e) => applyParagraphLineSpacing(e.target.value)}
-                                        title="Paragraph line spacing"
-                                    >
-                                        {PARAGRAPH_LINE_SPACING_OPTIONS.map((option) => (
-                                            <option key={option.value} value={option.value}>
-                                                {option.label}
-                                            </option>
-                                        ))}
-                                    </select>
+	                                    <RichTipWrap tip="Paragraph Line Spacing">
+	                                        <select
+	                                            className="toolbar-select toolbar-select-spacing"
+	                                            value={activeParagraphLineSpacing}
+	                                            onMouseDown={saveEditorSelection}
+	                                            onFocus={saveEditorSelection}
+	                                            onChange={(e) => applyParagraphLineSpacing(e.target.value)}
+	                                            aria-label={describeTool("Paragraph Line Spacing")}
+	                                        >
+	                                            {PARAGRAPH_LINE_SPACING_OPTIONS.map((option) => (
+	                                                <option key={option.value} value={option.value}>
+	                                                    {option.label}
+	                                                </option>
+	                                            ))}
+	                                        </select>
+	                                    </RichTipWrap>
                                     <TipBtn
                                         tip={paragraphNoSpaceAfter ? "Add Space After Paragraph" : "Remove Space After Paragraph"}
                                         className={`toolbar-btn ${paragraphNoSpaceAfter ? "active" : ""}`}
@@ -956,6 +1176,56 @@ export default function Toolbar({
                                     >
                                         <i className="fa-solid fa-text-height" />
                                     </TipBtn>
+                                </div>
+
+                                <div className="toolbar-compact-row">
+                                    {btn("fa-solid fa-bold", (e) => e.chain().focus().toggleBold().run(), editor?.isActive("bold"), "Bold")}
+                                    {btn("fa-solid fa-italic", (e) => e.chain().focus().toggleItalic().run(), editor?.isActive("italic"), "Italic")}
+                                    {btn("fa-solid fa-underline", (e) => e.chain().focus().toggleUnderline().run(), editor?.isActive("underline"), "Underline")}
+                                    {btn("fa-solid fa-strikethrough", (e) => e.chain().focus().toggleStrike().run(), editor?.isActive("strike"), "Strikethrough")}
+                                    <TipBtn
+                                        tip="Reset Text Color"
+                                        className="toolbar-btn"
+                                        onMouseDown={saveEditorSelection}
+                                        onClick={clearTextColor}
+                                    >
+                                        <span
+                                            className="toolbar-text-color-indicator"
+                                            style={{ "--toolbar-text-color": activeTextColor }}
+                                        >
+                                            A
+                                        </span>
+                                    </TipBtn>
+	                                    <RichTipWrap tip="Text Color">
+	                                        <input
+	                                            type="color"
+	                                            className="toolbar-color-input toolbar-text-color"
+	                                            value={activeTextColor}
+	                                            onMouseDown={saveEditorSelection}
+	                                            onFocus={saveEditorSelection}
+	                                            onChange={(e) => applyTextColor(e.target.value)}
+	                                            aria-label={describeTool("Text Color")}
+	                                        />
+	                                    </RichTipWrap>
+                                    <TipBtn
+                                        tip={editor?.isActive("highlight") ? "Remove Highlight" : "Highlight Text"}
+                                        className={`toolbar-btn ${editor?.isActive("highlight") ? "active" : ""}`}
+                                        onMouseDown={saveEditorSelection}
+                                        onClick={toggleHighlight}
+                                    >
+                                        <i className="fa-solid fa-highlighter" />
+                                    </TipBtn>
+	                                    <RichTipWrap tip="Highlight Color">
+	                                        <input
+	                                            type="color"
+	                                            className="toolbar-color-input toolbar-highlight-color"
+	                                            value={activeHighlightColor}
+	                                            onMouseDown={saveEditorSelection}
+	                                            onFocus={saveEditorSelection}
+	                                            onChange={(e) => applyHighlightColor(e.target.value)}
+	                                            aria-label={describeTool("Highlight Color")}
+	                                        />
+	                                    </RichTipWrap>
                                 </div>
 
                                 <div className="toolbar-compact-row">
@@ -1003,6 +1273,20 @@ export default function Toolbar({
                                     <TipBtn tip="Attach File" className="toolbar-btn" onClick={addFile}>
                                         <i className="fa-solid fa-paperclip" />
                                     </TipBtn>
+                                    <div className="table-picker-wrapper" ref={tableRef}>
+                                        <span ref={tableBtnRef} style={{ display: "inline-flex" }}>
+                                            <TipBtn
+                                                tip="Insert Table"
+                                                className={`toolbar-btn ${showTablePicker ? "active" : ""}`}
+                                                onClick={(event) => {
+                                                    event.stopPropagation();
+                                                    openTablePickerFromAnchor(event.currentTarget);
+                                                }}
+                                            >
+                                                <i className="fa-solid fa-table-cells" />
+                                            </TipBtn>
+                                        </span>
+                                    </div>
                                     <div className="emoji-picker-wrapper" ref={emojiRef}>
                                         <span ref={emojiBtnRef} style={{ display: "inline-flex" }}>
                                             <TipBtn
@@ -1082,15 +1366,100 @@ export default function Toolbar({
                         style={{ top: emojiPosition.top, left: emojiPosition.left }}
                     >
                         {EMOJI_LIST.map((emoji) => (
-                            <button
-                                key={emoji}
-                                type="button"
-                                className="emoji-item"
-                                onClick={() => insertEmoji(emoji)}
-                            >
+	                            <button
+	                                key={emoji}
+	                                type="button"
+	                                className="emoji-item"
+	                                title={`Insert emoji: ${emoji}`}
+	                                aria-label={`Insert emoji: ${emoji}`}
+	                                onClick={() => insertEmoji(emoji)}
+	                            >
                                 {emoji}
                             </button>
                         ))}
+                    </div>,
+                    document.body
+                )}
+
+                {showTablePicker && ReactDOM.createPortal(
+                    <div
+                        className="table-picker-popover"
+                        ref={tablePortalRef}
+                        style={{ top: tablePosition.top, left: tablePosition.left }}
+                    >
+                        <div className="table-picker-title">
+                            <span>Insert table</span>
+                            <strong>{tableRows} x {tableColumns}</strong>
+                        </div>
+
+                        <div className="table-picker-grid" aria-label="Choose table size">
+                            {Array.from({ length: TABLE_PICKER_ROWS }, (_, rowIndex) =>
+                                Array.from({ length: TABLE_PICKER_COLUMNS }, (_, columnIndex) => {
+                                    const rows = rowIndex + 1;
+                                    const columns = columnIndex + 1;
+                                    const isSelected = rows <= tableRows && columns <= tableColumns;
+
+                                    return (
+	                                        <button
+	                                            type="button"
+	                                            key={`${rows}-${columns}`}
+	                                            className={`table-picker-cell ${isSelected ? "selected" : ""}`}
+                                            onMouseEnter={() => {
+                                                setTableRows(rows);
+                                                setTableColumns(columns);
+                                            }}
+                                            onFocus={() => {
+                                                setTableRows(rows);
+                                                setTableColumns(columns);
+	                                            }}
+	                                            onClick={() => insertTable(rows, columns)}
+	                                            aria-label={`Insert ${rows} row by ${columns} column table`}
+	                                            title={`Insert ${rows} row by ${columns} column table`}
+	                                        />
+                                    );
+                                })
+                            )}
+                        </div>
+
+                        <div className="table-picker-custom">
+                            <label>
+                                <span>Rows</span>
+                                <input
+                                    type="number"
+                                    min="1"
+                                    max={MAX_TABLE_ROWS}
+	                                    value={tableRows}
+	                                    title="Rows: Set how many table rows to insert."
+	                                    aria-label="Rows: Set how many table rows to insert."
+	                                    onChange={(event) => setTableRows(
+                                        clampTableSize(event.target.value, MAX_TABLE_ROWS)
+                                    )}
+                                />
+                            </label>
+                            <label>
+                                <span>Columns</span>
+                                <input
+                                    type="number"
+                                    min="1"
+                                    max={MAX_TABLE_COLUMNS}
+	                                    value={tableColumns}
+	                                    title="Columns: Set how many table columns to insert."
+	                                    aria-label="Columns: Set how many table columns to insert."
+	                                    onChange={(event) => setTableColumns(
+                                        clampTableSize(event.target.value, MAX_TABLE_COLUMNS)
+                                    )}
+                                />
+                            </label>
+                            <button
+	                                type="button"
+	                                className="table-picker-insert"
+	                                title="Insert table: Add the selected table size to the note."
+	                                aria-label="Insert table: Add the selected table size to the note."
+	                                onClick={() => insertTable()}
+                            >
+                                Insert
+                            </button>
+                        </div>
                     </div>,
                     document.body
                 )}
@@ -1124,40 +1493,49 @@ export default function Toolbar({
 
                             <div className="toolbar-input-row">
                                 <label className="advanced-label" htmlFor="accentPrimaryPicker">Primary Accent</label>
-                                <input
-                                    id="accentPrimaryPicker"
-                                    type="color"
-                                    className="toolbar-color-input"
-                                    value={accentPrimary || "#6c63ff"}
-                                    onChange={(e) => onChangeAccentPrimary?.(e.target.value)}
-                                />
+	                                <RichTipWrap tip="Primary Accent">
+	                                    <input
+	                                        id="accentPrimaryPicker"
+	                                        type="color"
+	                                        className="toolbar-color-input"
+	                                        value={accentPrimary || "#6c63ff"}
+	                                        aria-label={describeTool("Primary Accent")}
+	                                        onChange={(e) => onChangeAccentPrimary?.(e.target.value)}
+	                                    />
+	                                </RichTipWrap>
                             </div>
 
                             <div className="toolbar-input-row">
                                 <label className="advanced-label" htmlFor="accentSecondaryPicker">Secondary Accent</label>
-                                <input
-                                    id="accentSecondaryPicker"
-                                    type="color"
-                                    className="toolbar-color-input"
-                                    value={accentSecondary || "#00d4aa"}
-                                    onChange={(e) => onChangeAccentSecondary?.(e.target.value)}
-                                />
+	                                <RichTipWrap tip="Secondary Accent">
+	                                    <input
+	                                        id="accentSecondaryPicker"
+	                                        type="color"
+	                                        className="toolbar-color-input"
+	                                        value={accentSecondary || "#00d4aa"}
+	                                        aria-label={describeTool("Secondary Accent")}
+	                                        onChange={(e) => onChangeAccentSecondary?.(e.target.value)}
+	                                    />
+	                                </RichTipWrap>
                             </div>
 
                             <div className="toolbar-input-row">
                                 <label className="advanced-label" htmlFor="uiFontPicker">Interface Font</label>
-                                <select
-                                    id="uiFontPicker"
-                                    className="toolbar-select toolbar-select-advanced"
-                                    value={uiFontFamily || "default"}
-                                    onChange={(e) => onChangeUiFontFamily?.(e.target.value)}
-                                >
-                                    {UI_FONT_OPTIONS.map((option) => (
-                                        <option key={option.label} value={option.value}>
-                                            {option.label}
-                                        </option>
-                                    ))}
-                                </select>
+	                                <RichTipWrap tip="Interface Font">
+	                                    <select
+	                                        id="uiFontPicker"
+	                                        className="toolbar-select toolbar-select-advanced"
+	                                        value={uiFontFamily || "default"}
+	                                        aria-label={describeTool("Interface Font")}
+	                                        onChange={(e) => onChangeUiFontFamily?.(e.target.value)}
+	                                    >
+	                                        {UI_FONT_OPTIONS.map((option) => (
+	                                            <option key={option.label} value={option.value}>
+	                                                {option.label}
+	                                            </option>
+	                                        ))}
+	                                    </select>
+	                                </RichTipWrap>
                             </div>
 
                             <div className="toggle-container" style={{ padding: "8px 4px" }}>
@@ -1165,9 +1543,10 @@ export default function Toolbar({
                                 <button
                                     type="button"
                                     className={`toggle-switch ${showLineNumbers ? "active" : ""}`}
-                                    onClick={() => onChangeShowLineNumbers?.(!showLineNumbers)}
-                                    aria-label="Toggle line numbers"
-                                    aria-pressed={showLineNumbers}
+	                                    onClick={() => onChangeShowLineNumbers?.(!showLineNumbers)}
+	                                    title={describeTool("Line Numbers")}
+	                                    aria-label={describeTool("Line Numbers")}
+	                                    aria-pressed={showLineNumbers}
                                 />
                             </div>
 
@@ -1181,11 +1560,20 @@ export default function Toolbar({
                                 {BG_COLORS.map((c) => (
                                     <div
                                         key={c.name}
-                                        className={`color-swatch ${c.value === null ? "default-swatch" : ""} ${editorBg === c.value ? "active" : ""}`}
-                                        style={c.value ? { background: c.value } : undefined}
-                                        title={c.name}
-                                        onClick={() => onChangeBg(c.value)}
-                                    />
+	                                        className={`color-swatch ${c.value === null ? "default-swatch" : ""} ${editorBg === c.value ? "active" : ""}`}
+	                                        style={c.value ? { background: c.value } : undefined}
+	                                        title={`Notepad Background: ${c.name}. ${TOOLTIP_DESCRIPTIONS["Notepad Background"]}`}
+	                                        aria-label={`Notepad Background: ${c.name}. ${TOOLTIP_DESCRIPTIONS["Notepad Background"]}`}
+	                                        role="button"
+	                                        tabIndex={0}
+	                                        onClick={() => onChangeBg(c.value)}
+	                                        onKeyDown={(event) => {
+	                                            if (event.key === "Enter" || event.key === " ") {
+	                                                event.preventDefault();
+	                                                onChangeBg(c.value);
+	                                            }
+	                                        }}
+	                                    />
                                 ))}
                             </div>
 
@@ -1199,11 +1587,20 @@ export default function Toolbar({
                                 {FONT_COLORS.map((c) => (
                                     <div
                                         key={c.name}
-                                        className={`color-swatch ${c.value === null ? "default-swatch" : ""} ${fontColor === c.value ? "active" : ""}`}
-                                        style={c.value ? { background: c.value } : undefined}
-                                        title={c.name}
-                                        onClick={() => onChangeFontColor(c.value)}
-                                    />
+	                                        className={`color-swatch ${c.value === null ? "default-swatch" : ""} ${fontColor === c.value ? "active" : ""}`}
+	                                        style={c.value ? { background: c.value } : undefined}
+	                                        title={`Font Color: ${c.name}. ${TOOLTIP_DESCRIPTIONS["Font Color"]}`}
+	                                        aria-label={`Font Color: ${c.name}. ${TOOLTIP_DESCRIPTIONS["Font Color"]}`}
+	                                        role="button"
+	                                        tabIndex={0}
+	                                        onClick={() => onChangeFontColor(c.value)}
+	                                        onKeyDown={(event) => {
+	                                            if (event.key === "Enter" || event.key === " ") {
+	                                                event.preventDefault();
+	                                                onChangeFontColor(c.value);
+	                                            }
+	                                        }}
+	                                    />
                                 ))}
                             </div>
                         </div>,

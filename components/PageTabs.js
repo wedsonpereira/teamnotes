@@ -4,6 +4,18 @@ import { useState, useRef, useEffect, useCallback, useMemo, createPortal } from 
 import ReactDOM from "react-dom";
 
 const TAB_RENDER_LIMIT = 28;
+const PAGE_TAB_DRAG_MIME = "application/x-teamnote-page-tab";
+
+function moveItem(items, fromIndex, toIndex) {
+    const nextItems = [...items];
+    const [movedItem] = nextItems.splice(fromIndex, 1);
+    nextItems.splice(toIndex, 0, movedItem);
+    return nextItems;
+}
+
+function areArraysEqual(first, second) {
+    return first.length === second.length && first.every((item, index) => item === second[index]);
+}
 
 export default function PageTabs({
     roomId,
@@ -20,11 +32,14 @@ export default function PageTabs({
     const [moreMenuOpen, setMoreMenuOpen] = useState(false);
     const [pinnedIds, setPinnedIds] = useState([]);
     const [deleteConfirmPage, setDeleteConfirmPage] = useState(null);
+    const [draggingPageId, setDraggingPageId] = useState(null);
+    const [dragOverPageId, setDragOverPageId] = useState(null);
 
     const editInputRef = useRef(null);
     const menuRef = useRef(null);
     const moreMenuRef = useRef(null);
     const deleteDialogRef = useRef(null);
+    const suppressNextClickRef = useRef(false);
 
     const notifySessionExpired = () => {
         if (typeof window !== "undefined") {
@@ -246,6 +261,75 @@ export default function PageTabs({
         }
     };
 
+    const closePages = async (pageIds, fallbackPageId) => {
+        const targetIds = [...new Set(pageIds)].filter((id) => id !== fallbackPageId);
+        if (targetIds.length === 0) {
+            setMenuOpenId(null);
+            setMenuPosition(null);
+            return;
+        }
+
+        const targetIdSet = new Set(targetIds);
+        const remainingPages = pages.filter((page) => !targetIdSet.has(page.id));
+        if (remainingPages.length === 0) return;
+
+        setMenuOpenId(null);
+        setMenuPosition(null);
+        setMoreMenuOpen(false);
+
+        try {
+            const results = await Promise.all(
+                targetIds.map((pageId) =>
+                    fetch(`/api/rooms/${roomId}/pages/${pageId}`, { method: "DELETE" })
+                )
+            );
+
+            if (results.some((res) => res.status === 401)) {
+                notifySessionExpired();
+                return;
+            }
+
+            if (results.some((res) => !res.ok)) {
+                await fetchPages();
+                return;
+            }
+
+            setPages(remainingPages);
+            setPinnedIds((prev) => prev.filter((id) => !targetIdSet.has(id)));
+
+            if (targetIdSet.has(activePage)) {
+                onPageChange(fallbackPageId || remainingPages[0].id);
+            }
+
+            socket?.emit("pages-changed", { roomId });
+        } catch (err) {
+            console.error("Failed to close pages:", err);
+            await fetchPages();
+        }
+    };
+
+    const closePagesAround = (pageId, direction) => {
+        const pageIndex = orderedPages.findIndex((page) => page.id === pageId);
+        if (pageIndex === -1) return;
+
+        if (direction === "left") {
+            closePages(orderedPages.slice(0, pageIndex).map((page) => page.id), pageId);
+            return;
+        }
+
+        if (direction === "right") {
+            closePages(orderedPages.slice(pageIndex + 1).map((page) => page.id), pageId);
+            return;
+        }
+
+        closePages(
+            orderedPages
+                .filter((page) => page.id !== pageId)
+                .map((page) => page.id),
+            pageId
+        );
+    };
+
     const togglePinned = (pageId) => {
         setPinnedIds((prev) => {
             if (prev.includes(pageId)) {
@@ -271,9 +355,114 @@ export default function PageTabs({
     };
 
     const handleTabClick = (pageId) => {
+        if (suppressNextClickRef.current) return;
         if (editingId === pageId) return;
         onPageChange(pageId);
         setMoreMenuOpen(false);
+    };
+
+    const openTabMenu = (pageId, position) => {
+        setMoreMenuOpen(false);
+        setMenuOpenId(pageId);
+        setMenuPosition(position);
+    };
+
+    const persistPageOrder = useCallback(async (nextOrderedPages) => {
+        const nextPinnedIds = nextOrderedPages
+            .filter((page) => pinnedIds.includes(page.id))
+            .map((page) => page.id);
+
+        if (!areArraysEqual(nextPinnedIds, pinnedIds)) {
+            setPinnedIds(nextPinnedIds);
+        }
+
+        setPages(nextOrderedPages.map((page, index) => ({ ...page, sortOrder: index })));
+
+        try {
+            const res = await fetch(`/api/rooms/${roomId}/pages`, {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    pageIds: nextOrderedPages.map((page) => page.id),
+                }),
+            });
+
+            if (res.status === 401) {
+                notifySessionExpired();
+                await fetchPages();
+                return;
+            }
+
+            if (!res.ok) {
+                await fetchPages();
+                return;
+            }
+
+            const data = await res.json();
+            if (data.pages) {
+                setPages(data.pages);
+            }
+
+            socket?.emit("pages-changed", { roomId });
+        } catch (err) {
+            console.error("Failed to reorder pages:", err);
+            await fetchPages();
+        }
+    }, [fetchPages, pinnedIds, roomId, socket]);
+
+    const handleTabDragStart = (event, pageId) => {
+        if (editingId === pageId) {
+            event.preventDefault();
+            return;
+        }
+
+        suppressNextClickRef.current = true;
+        setDraggingPageId(pageId);
+        setMenuOpenId(null);
+        setMoreMenuOpen(false);
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData(PAGE_TAB_DRAG_MIME, pageId);
+    };
+
+    const handleTabDragOver = (event, pageId) => {
+        if (!draggingPageId || draggingPageId === pageId) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "move";
+        setDragOverPageId(pageId);
+    };
+
+    const handleTabDrop = (event, targetPageId) => {
+        event.preventDefault();
+
+        const sourcePageId = draggingPageId || event.dataTransfer.getData(PAGE_TAB_DRAG_MIME);
+        setDraggingPageId(null);
+        setDragOverPageId(null);
+
+        if (!sourcePageId || sourcePageId === targetPageId) return;
+
+        const fromIndex = orderedPages.findIndex((page) => page.id === sourcePageId);
+        const toIndex = orderedPages.findIndex((page) => page.id === targetPageId);
+        if (fromIndex === -1 || toIndex === -1) return;
+
+        persistPageOrder(moveItem(orderedPages, fromIndex, toIndex));
+    };
+
+    const movePageByOffset = (pageId, offset) => {
+        const fromIndex = orderedPages.findIndex((page) => page.id === pageId);
+        const toIndex = fromIndex + offset;
+        if (fromIndex === -1 || toIndex < 0 || toIndex >= orderedPages.length) return;
+
+        setMenuOpenId(null);
+        setMenuPosition(null);
+        persistPageOrder(moveItem(orderedPages, fromIndex, toIndex));
+    };
+
+    const handleTabDragEnd = () => {
+        setDraggingPageId(null);
+        setDragOverPageId(null);
+        window.setTimeout(() => {
+            suppressNextClickRef.current = false;
+        }, 0);
     };
 
     return (
@@ -285,8 +474,21 @@ export default function PageTabs({
                     return (
                         <div
                             key={page.id}
-                            className={`page-tab ${activePage === page.id ? "active" : ""}`}
+                            className={`page-tab ${activePage === page.id ? "active" : ""} ${draggingPageId === page.id ? "dragging" : ""} ${dragOverPageId === page.id ? "drag-over" : ""}`}
+                            draggable={editingId !== page.id}
                             onClick={() => handleTabClick(page.id)}
+                            onDragStart={(event) => handleTabDragStart(event, page.id)}
+                            onDragOver={(event) => handleTabDragOver(event, page.id)}
+                            onDragLeave={() => setDragOverPageId((currentId) => currentId === page.id ? null : currentId)}
+                            onDrop={(event) => handleTabDrop(event, page.id)}
+                            onDragEnd={handleTabDragEnd}
+                            onContextMenu={(event) => {
+                                event.preventDefault();
+                                openTabMenu(page.id, {
+                                    top: event.clientY,
+                                    left: event.clientX,
+                                });
+                            }}
                         >
                             {isPinned && (
                                 <span className="page-tab-pin" title="Pinned">
@@ -313,19 +515,18 @@ export default function PageTabs({
                                 onClick={(event) => {
                                     event.stopPropagation();
                                     setMoreMenuOpen(false);
-                                    if (menuOpenId === page.id) {
-                                        setMenuOpenId(null);
-                                        setMenuPosition(null);
-                                    } else {
-                                        const rect = event.currentTarget.getBoundingClientRect();
-                                        setMenuPosition({
-                                            top: rect.bottom + 4,
-                                            left: rect.left,
-                                        });
-                                        setMenuOpenId(page.id);
-                                    }
-                                }}
-                            >
+	                                    if (menuOpenId === page.id) {
+	                                        setMenuOpenId(null);
+	                                        setMenuPosition(null);
+	                                    } else {
+	                                        const rect = event.currentTarget.getBoundingClientRect();
+	                                        openTabMenu(page.id, {
+	                                            top: rect.bottom + 4,
+	                                            left: rect.left,
+	                                        });
+	                                    }
+	                                }}
+	                            >
                                 <i className="fa-solid fa-ellipsis-vertical" />
                             </button>
                         </div>
@@ -372,6 +573,10 @@ export default function PageTabs({
                 const menuPage = orderedPages.find((p) => p.id === menuOpenId);
                 if (!menuPage) return null;
                 const isPinned = pinnedIds.includes(menuPage.id);
+                const menuPageIndex = orderedPages.findIndex((p) => p.id === menuPage.id);
+                const hasLeftPages = menuPageIndex > 0;
+                const hasRightPages = menuPageIndex < orderedPages.length - 1;
+                const hasOtherPages = orderedPages.length > 1;
 
                 return ReactDOM.createPortal(
                     <div
@@ -398,6 +603,55 @@ export default function PageTabs({
                         >
                             <i className="fa-solid fa-pen" />
                             Rename
+                        </button>
+
+                        {menuPageIndex > 0 && (
+                            <button
+                                className="page-tab-menu-item"
+                                onClick={() => movePageByOffset(menuPage.id, -1)}
+                            >
+                                <i className="fa-solid fa-arrow-left" />
+                                Move left
+                            </button>
+                        )}
+
+                        {menuPageIndex < orderedPages.length - 1 && (
+                            <button
+                                className="page-tab-menu-item"
+                                onClick={() => movePageByOffset(menuPage.id, 1)}
+	                            >
+	                                <i className="fa-solid fa-arrow-right" />
+	                                Move right
+                            </button>
+                        )}
+
+                        <div className="page-tab-menu-separator" />
+
+                        <button
+                            className="page-tab-menu-item"
+                            disabled={!hasOtherPages}
+                            onClick={() => closePagesAround(menuPage.id, "all")}
+                        >
+                            <i className="fa-solid fa-window-restore" />
+                            Close all
+                        </button>
+
+                        <button
+                            className="page-tab-menu-item"
+                            disabled={!hasLeftPages}
+                            onClick={() => closePagesAround(menuPage.id, "left")}
+                        >
+                            <i className="fa-solid fa-arrow-left" />
+                            Close all to the left
+                        </button>
+
+                        <button
+                            className="page-tab-menu-item"
+                            disabled={!hasRightPages}
+                            onClick={() => closePagesAround(menuPage.id, "right")}
+                        >
+                            <i className="fa-solid fa-arrow-right" />
+                            Close all to the right
                         </button>
 
                         {pages.length > 1 && (
