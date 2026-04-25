@@ -93,6 +93,104 @@ export async function GET(request, { params }) {
     }
 }
 
+// PUT /api/rooms/[roomId]/pages — Reorder pages in a room
+export async function PUT(request, { params }) {
+    try {
+        const { roomId } = await params;
+        const session = readRoomSessionFromRequest(request, roomId);
+        if (!session) {
+            return NextResponse.json(
+                { error: "Session expired. Please re-enter the room." },
+                { status: 401 }
+            );
+        }
+
+        const { pageIds } = await request.json();
+        if (!Array.isArray(pageIds) || pageIds.some((id) => typeof id !== "string")) {
+            return NextResponse.json(
+                { error: "pageIds must be an array of page ids." },
+                { status: 400 }
+            );
+        }
+
+        const member = await prisma.roomMember.findFirst({
+            where: { roomId, userId: session.userId, status: "APPROVED" },
+        });
+
+        if (!member) {
+            return NextResponse.json(
+                { error: "Access denied." },
+                { status: 403 }
+            );
+        }
+
+        const uniquePageIds = [...new Set(pageIds)];
+        if (uniquePageIds.length !== pageIds.length) {
+            return NextResponse.json(
+                { error: "Duplicate page ids are not allowed." },
+                { status: 400 }
+            );
+        }
+
+        const existingPages = await prisma.page.findMany({
+            where: { roomId },
+            select: { id: true },
+            orderBy: { sortOrder: "asc" },
+        });
+        const existingIds = existingPages.map((page) => page.id);
+
+        if (
+            uniquePageIds.length !== existingIds.length
+            || existingIds.some((id) => !uniquePageIds.includes(id))
+        ) {
+            return NextResponse.json(
+                { error: "pageIds must include every page in this room exactly once." },
+                { status: 400 }
+            );
+        }
+
+        await prisma.$transaction(async (tx) => {
+            // Move into a temporary range first to avoid unique sortOrder collisions.
+            await Promise.all(
+                uniquePageIds.map((id, index) =>
+                    tx.page.update({
+                        where: { id },
+                        data: { sortOrder: -(index + 1) },
+                    })
+                )
+            );
+
+            await Promise.all(
+                uniquePageIds.map((id, index) =>
+                    tx.page.update({
+                        where: { id },
+                        data: { sortOrder: index },
+                    })
+                )
+            );
+        });
+
+        const pages = await prisma.page.findMany({
+            where: { roomId },
+            select: {
+                id: true,
+                title: true,
+                sortOrder: true,
+                createdAt: true,
+            },
+            orderBy: { sortOrder: "asc" },
+        });
+
+        return NextResponse.json({ pages });
+    } catch (error) {
+        console.error("Reorder pages error:", error);
+        return NextResponse.json(
+            { error: "Failed to reorder pages." },
+            { status: 500 }
+        );
+    }
+}
+
 // POST /api/rooms/[roomId]/pages — Create a new page
 export async function POST(request, { params }) {
     try {

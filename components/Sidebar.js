@@ -343,7 +343,7 @@ export default function Sidebar({
             {/* Floating toggle button when sidebar is collapsed */}
             {isCollapsed && !isOpen && (
                 <button
-                    className="sidebar-float-toggle"
+                    className="sidebar-float-toggle collapsed"
                     onClick={onToggle}
                     title="Open Sidebar"
                 >
