@@ -12,7 +12,9 @@ const dev = process.env.NODE_ENV !== "production";
 const hostname = "localhost";
 const port = parseInt(process.env.PORT || "3001", 10);
 
-const app = next({ dev, hostname, port });
+// Force webpack in development for stability. Turbopack's persisted dev cache
+// has been panicking in this environment, while production remains unchanged.
+const app = next({ dev, hostname, port, webpack: dev });
 const handle = app.getRequestHandler();
 const prisma = new PrismaClient();
 
@@ -174,6 +176,20 @@ function scheduleRoomCleanup(roomId) {
     }, ROOM_DOC_CLEANUP_DELAY_MS);
 
     roomCleanupTimers.set(roomId, timer);
+}
+
+function getRoomPresenceUsers(roomId) {
+    const roomUserMap = roomUsers.get(roomId);
+    if (!roomUserMap) return [];
+
+    const dedupedUsers = new Map();
+    for (const userData of roomUserMap.values()) {
+        const dedupeKey = userData?.userId || userData?.socketId;
+        if (!dedupeKey) continue;
+        dedupedUsers.set(dedupeKey, userData);
+    }
+
+    return Array.from(dedupedUsers.values());
 }
 
 async function hasApprovedRoomAccess(roomId, userId) {
@@ -601,7 +617,9 @@ app.prepare().then(() => {
 
         if (!res.headersSent) {
             res.setHeader("X-Content-Type-Options", "nosniff");
-            res.setHeader("X-Frame-Options", "DENY");
+            // Allow same-origin embedding so the floating note window can
+            // render the current page inside a browser-managed mini window.
+            res.setHeader("X-Frame-Options", "SAMEORIGIN");
             res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
             res.setHeader(
                 "Permissions-Policy",
@@ -765,7 +783,7 @@ app.prepare().then(() => {
 
                 // Broadcast presence update
                 io.to(roomId).emit("presence-update", {
-                    users: Array.from(roomUsers.get(roomId).values()),
+                    users: getRoomPresenceUsers(roomId),
                 });
 
                 // Send full Yjs state for the current page
@@ -811,7 +829,7 @@ app.prepare().then(() => {
                     const userData = roomUsers.get(roomId).get(socket.id);
                     userData.pageId = normalizedPageId;
                     io.to(roomId).emit("presence-update", {
-                        users: Array.from(roomUsers.get(roomId).values()),
+                        users: getRoomPresenceUsers(roomId),
                     });
                 }
 
@@ -1069,7 +1087,7 @@ app.prepare().then(() => {
                     scheduleRoomCleanup(roomId);
                 } else {
                     io.to(roomId).emit("presence-update", {
-                        users: Array.from(roomUsers.get(roomId).values()),
+                        users: getRoomPresenceUsers(roomId),
                     });
                 }
             }
