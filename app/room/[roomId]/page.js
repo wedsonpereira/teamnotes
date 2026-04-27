@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { io } from "socket.io-client";
 import dynamic from "next/dynamic";
 import Toolbar from "@/components/Toolbar";
@@ -11,6 +11,11 @@ import { readClientSession, clearClientSession } from "@/lib/clientSession";
 import * as Y from "yjs";
 
 const UI_SETTINGS_STORAGE_PREFIX = "teamnote_ui_settings_";
+const FLOATING_WINDOW_PLACEMENTS = new Set([
+    "middle",
+    "left-bottom",
+    "right-bottom",
+]);
 
 function hexToRgb(value) {
     const hex = String(value || "").replace("#", "").trim();
@@ -35,7 +40,11 @@ const Editor = dynamic(() => import("@/components/Editor"), {
 export default function RoomPage() {
     const params = useParams();
     const router = useRouter();
+    const searchParams = useSearchParams();
     const roomId = params.roomId;
+    const isFloatingWindow = searchParams.get("floating") === "1";
+    const isEmbeddedFloating = searchParams.get("embedded") === "1";
+    const requestedPageId = searchParams.get("page");
 
     const [socket, setSocket] = useState(null);
     const [connected, setConnected] = useState(false);
@@ -53,16 +62,24 @@ export default function RoomPage() {
     const [accentPrimary, setAccentPrimary] = useState("#6c63ff");
     const [accentSecondary, setAccentSecondary] = useState("#00d4aa");
     const [uiFontFamily, setUiFontFamily] = useState("default");
+    const [floatingPlacement, setFloatingPlacement] = useState("right-bottom");
     const [onlineUsers, setOnlineUsers] = useState([]);
     const [typingUserIds, setTypingUserIds] = useState([]);
     const [activePage, setActivePage] = useState(null);
     const expiryTimerRef = useRef(null);
     const ydocCacheRef = useRef(new Map());
     const activePageRef = useRef(null);
+    const floatingWindowRef = useRef(null);
+    const floatingIframeRef = useRef(null);
 
     useEffect(() => {
         activePageRef.current = activePage;
     }, [activePage]);
+
+    useEffect(() => {
+        if (!requestedPageId) return;
+        setActivePage((current) => (current === requestedPageId ? current : requestedPageId));
+    }, [requestedPageId]);
 
     // Get or create a cached Yjs document for a specific page.
     const getOrCreateYDoc = useCallback((pageId) => {
@@ -103,6 +120,28 @@ export default function RoomPage() {
                 if (typeof saved.uiFontFamily === "string") {
                     setUiFontFamily(saved.uiFontFamily);
                 }
+                if (
+                    typeof saved.floatingPlacement === "string" &&
+                    FLOATING_WINDOW_PLACEMENTS.has(
+                        saved.floatingPlacement === "center"
+                            ? "middle"
+                            : saved.floatingPlacement === "bottom-left"
+                                ? "left-bottom"
+                                : saved.floatingPlacement === "bottom-right"
+                                    ? "right-bottom"
+                                    : saved.floatingPlacement
+                    )
+                ) {
+                    setFloatingPlacement(
+                        saved.floatingPlacement === "center"
+                            ? "middle"
+                            : saved.floatingPlacement === "bottom-left"
+                                ? "left-bottom"
+                                : saved.floatingPlacement === "bottom-right"
+                                    ? "right-bottom"
+                                    : saved.floatingPlacement
+                    );
+                }
                 if (typeof saved.sidebarCollapsed === "boolean") {
                     setSidebarCollapsed(saved.sidebarCollapsed);
                 }
@@ -126,6 +165,7 @@ export default function RoomPage() {
                 accentPrimary,
                 accentSecondary,
                 uiFontFamily,
+                floatingPlacement,
                 sidebarCollapsed,
             })
         );
@@ -137,6 +177,7 @@ export default function RoomPage() {
         accentPrimary,
         accentSecondary,
         uiFontFamily,
+        floatingPlacement,
         sidebarCollapsed,
     ]);
 
@@ -474,6 +515,227 @@ export default function RoomPage() {
         setSaveStatus(status);
     }, []);
 
+    const buildRoomUrl = useCallback((pageId, options = {}) => {
+        const { floating = false, embedded = false } = options;
+        const nextParams = new URLSearchParams();
+        if (floating) {
+            nextParams.set("floating", "1");
+        }
+        if (embedded) {
+            nextParams.set("embedded", "1");
+        }
+        if (pageId) {
+            nextParams.set("page", pageId);
+        }
+
+        const query = nextParams.toString();
+        return query ? `/room/${roomId}?${query}` : `/room/${roomId}`;
+    }, [roomId]);
+
+    const getFloatingWindowCoordinates = useCallback((placement, width, height) => {
+        if (typeof window === "undefined") {
+            return { left: 0, top: 0 };
+        }
+
+        const margin = 24;
+        const screenLeft = window.screen.availLeft ?? window.screenLeft ?? 0;
+        const screenTop = window.screen.availTop ?? window.screenTop ?? 0;
+        const screenWidth = window.screen.availWidth || window.outerWidth || width;
+        const screenHeight = window.screen.availHeight || window.outerHeight || height;
+
+        const horizontalPositions = {
+            left: screenLeft + margin,
+            center: screenLeft + Math.max(margin, Math.round((screenWidth - width) / 2)),
+            right: screenLeft + Math.max(margin, screenWidth - width - margin),
+        };
+        const verticalPositions = {
+            top: screenTop + margin,
+            middle: screenTop + Math.max(margin, Math.round((screenHeight - height) / 2)),
+            bottom: screenTop + Math.max(margin, screenHeight - height - margin),
+        };
+
+        const normalized = FLOATING_WINDOW_PLACEMENTS.has(placement)
+            ? placement
+            : "right-bottom";
+        if (normalized === "middle") {
+            return {
+                left: horizontalPositions.center,
+                top: verticalPositions.middle,
+            };
+        }
+        const [horizontalKey, verticalKey] = normalized.split("-");
+        const left = horizontalPositions[horizontalKey] ?? horizontalPositions.right;
+        const top = verticalPositions[verticalKey] ?? verticalPositions.bottom;
+
+        return { left, top };
+    }, []);
+
+    const mountFloatingIframe = useCallback((targetWindow, pageId) => {
+        if (typeof window === "undefined" || !targetWindow?.document || !pageId) return;
+
+        const floatingUrl = buildRoomUrl(pageId, { floating: true, embedded: true });
+        const absoluteFloatingUrl = new URL(floatingUrl, window.location.origin).toString();
+        const targetDocument = targetWindow.document;
+
+        targetDocument.title = roomName
+            ? `${roomName} - TeamNotes`
+            : "TeamNotes";
+        targetDocument.documentElement.style.background = "transparent";
+        targetDocument.body.style.margin = "0";
+        targetDocument.body.style.width = "100vw";
+        targetDocument.body.style.height = "100vh";
+        targetDocument.body.style.overflow = "hidden";
+        targetDocument.body.style.background = "var(--bg-primary, #0a0a0f)";
+
+        let iframe = floatingIframeRef.current;
+        if (!iframe || iframe.ownerDocument !== targetDocument) {
+            iframe = targetDocument.createElement("iframe");
+            iframe.title = "Floating TeamNote";
+            iframe.setAttribute("allow", "clipboard-read; clipboard-write");
+            iframe.style.width = "100%";
+            iframe.style.height = "100%";
+            iframe.style.border = "0";
+            iframe.style.display = "block";
+            iframe.style.background = "transparent";
+            targetDocument.body.replaceChildren(iframe);
+            floatingIframeRef.current = iframe;
+        }
+
+        if (iframe.src !== absoluteFloatingUrl) {
+            iframe.src = absoluteFloatingUrl;
+        }
+    }, [buildRoomUrl, roomName]);
+
+    const handleToggleFloatingWindow = useCallback(async (placementOverride) => {
+        if (typeof window === "undefined") return;
+
+        if (isEmbeddedFloating) {
+            if (window.top && window.top !== window) {
+                window.top.close();
+                return;
+            }
+
+            window.close();
+            return;
+        }
+
+        if (isFloatingWindow) {
+            window.close();
+            return;
+        }
+
+        const pageId = activePageRef.current;
+        if (!pageId) return;
+
+        const floatingUrl = buildRoomUrl(pageId, { floating: true, embedded: true });
+        const absoluteFloatingUrl = new URL(floatingUrl, window.location.origin).toString();
+        const width = 390;
+        const height = 600;
+        const placementToUse = FLOATING_WINDOW_PLACEMENTS.has(placementOverride)
+            ? placementOverride
+            : floatingPlacement;
+        const { left, top } = getFloatingWindowCoordinates(placementToUse, width, height);
+
+        const pictureInPictureApi = window.documentPictureInPicture;
+        if (pictureInPictureApi?.requestWindow) {
+            try {
+                const existingPictureWindow = pictureInPictureApi.window;
+                let targetWindow = existingPictureWindow && !existingPictureWindow.closed
+                    ? existingPictureWindow
+                    : null;
+
+                if (!targetWindow) {
+                    targetWindow = await pictureInPictureApi.requestWindow({
+                        width,
+                        height,
+                    });
+                    targetWindow.addEventListener("pagehide", () => {
+                        floatingWindowRef.current = null;
+                        floatingIframeRef.current = null;
+                    }, { once: true });
+                }
+
+                floatingWindowRef.current = targetWindow;
+                try {
+                    targetWindow.resizeTo?.(width, height);
+                    targetWindow.moveTo?.(left, top);
+                } catch (error) {
+                    console.warn("Browser-managed floating window position could not be changed:", error);
+                }
+                mountFloatingIframe(targetWindow, pageId);
+                targetWindow.focus?.();
+                return;
+            } catch (error) {
+                console.warn("Document Picture-in-Picture failed, falling back to popup:", error);
+            }
+        }
+
+        const features = [
+            "popup=yes",
+            `width=${width}`,
+            `height=${height}`,
+            `left=${left}`,
+            `top=${top}`,
+            "resizable=yes",
+            "scrollbars=yes",
+        ].join(",");
+
+        const existingWindow = floatingWindowRef.current;
+        if (existingWindow && !existingWindow.closed) {
+            try {
+                existingWindow.resizeTo(width, height);
+                existingWindow.moveTo(left, top);
+            } catch (error) {
+                console.warn("Unable to reposition floating note window:", error);
+            }
+            if (existingWindow.location.href !== absoluteFloatingUrl) {
+                existingWindow.location.href = absoluteFloatingUrl;
+            }
+            existingWindow.focus();
+            return;
+        }
+
+        const nextWindow = window.open(absoluteFloatingUrl, `teamnote-floating-${roomId}`, features);
+        if (!nextWindow) {
+            window.alert("The floating note window was blocked by your browser. Please allow pop-ups for this site and try again.");
+            return;
+        }
+
+        floatingWindowRef.current = nextWindow;
+        nextWindow.focus();
+    }, [
+        buildRoomUrl,
+        floatingPlacement,
+        getFloatingWindowCoordinates,
+        isEmbeddedFloating,
+        isFloatingWindow,
+        mountFloatingIframe,
+        roomName,
+        roomId,
+    ]);
+
+    useEffect(() => {
+        if (!isFloatingWindow || !roomId || !activePage) return;
+
+        const nextUrl = buildRoomUrl(activePage, {
+            floating: true,
+            embedded: isEmbeddedFloating,
+        });
+        const currentQuery = searchParams.toString();
+        const nextQuery = nextUrl.split("?")[1] || "";
+        if (currentQuery === nextQuery) return;
+
+        router.replace(nextUrl, { scroll: false });
+    }, [activePage, buildRoomUrl, isEmbeddedFloating, isFloatingWindow, roomId, router, searchParams]);
+
+    useEffect(() => {
+        if (typeof document === "undefined") return;
+
+        document.title = isFloatingWindow
+            ? `${roomName || "TeamNotes"} - Floating Note`
+            : `${roomName || "TeamNotes"} - TeamNotes`;
+    }, [isFloatingWindow, roomName]);
+
     if (!user || !accessChecked) {
         return (
             <div className="landing-container" style={{ textAlign: "center" }}>
@@ -532,35 +794,46 @@ export default function RoomPage() {
     const currentUserName = `${user.firstName || ""} ${user.lastName || ""}`.trim();
 
     return (
-        <div className={`editor-layout ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
-            <Toolbar
-                roomName={roomName}
-                saveStatus={saveStatus}
-                connected={connected}
-                theme={theme}
-                onToggleTheme={toggleTheme}
-                editorBg={editorBg}
-                onChangeBg={setEditorBg}
-                fontColor={fontColor}
-                onChangeFontColor={setFontColor}
-                typingUsers={typingUsers}
-                userName={currentUserName}
-                userColor={resolvedUserColor}
-                accentPrimary={accentPrimary}
-                accentSecondary={accentSecondary}
-                onChangeAccentPrimary={setAccentPrimary}
-                onChangeAccentSecondary={setAccentSecondary}
-                uiFontFamily={uiFontFamily}
-                onChangeUiFontFamily={setUiFontFamily}
-            />
+        <div
+            className={`editor-layout ${sidebarCollapsed && !isFloatingWindow ? "sidebar-collapsed" : ""} ${isFloatingWindow ? "floating-window" : ""} ${isEmbeddedFloating ? "embedded-floating" : ""}`}
+        >
+            {!isFloatingWindow && (
+                <Toolbar
+                    roomName={roomName}
+                    saveStatus={saveStatus}
+                    connected={connected}
+                    theme={theme}
+                    onToggleTheme={toggleTheme}
+                    editorBg={editorBg}
+                    onChangeBg={setEditorBg}
+                    fontColor={fontColor}
+                    onChangeFontColor={setFontColor}
+                    typingUsers={typingUsers}
+                    userName={currentUserName}
+                    userColor={resolvedUserColor}
+                    accentPrimary={accentPrimary}
+                    accentSecondary={accentSecondary}
+                    onChangeAccentPrimary={setAccentPrimary}
+                    onChangeAccentSecondary={setAccentSecondary}
+                    uiFontFamily={uiFontFamily}
+                    onChangeUiFontFamily={setUiFontFamily}
+                    floatingPlacement={floatingPlacement}
+                    onChangeFloatingPlacement={setFloatingPlacement}
+                    isFloatingWindow={isFloatingWindow}
+                    isEmbeddedFloating={isEmbeddedFloating}
+                    onToggleFloatingWindow={handleToggleFloatingWindow}
+                />
+            )}
 
-            <PageTabs
-                roomId={roomId}
-                userId={user.userId}
-                socket={socket}
-                activePage={activePage}
-                onPageChange={handlePageChange}
-            />
+            {!isEmbeddedFloating && (
+                <PageTabs
+                    roomId={roomId}
+                    userId={user.userId}
+                    socket={socket}
+                    activePage={activePage}
+                    onPageChange={handlePageChange}
+                />
+            )}
 
             {activePage && (
                 <Editor
@@ -580,20 +853,22 @@ export default function RoomPage() {
                 />
             )}
 
-            <Sidebar
-                roomId={roomId}
-                userId={user.userId}
-                isAdmin={user.isAdmin}
-                socket={socket}
-                isOpen={sidebarOpen}
-                isCollapsed={sidebarCollapsed}
-                onClose={() => setSidebarOpen(false)}
-                onToggle={handleSidebarToggle}
-                onlineUsers={onlineUsers}
-                onExitRoom={handleSessionExpired}
-                onLogout={handleSessionExpired}
-                onDeleteRoom={handleSessionExpired}
-            />
+            {!isFloatingWindow && (
+                <Sidebar
+                    roomId={roomId}
+                    userId={user.userId}
+                    isAdmin={user.isAdmin}
+                    socket={socket}
+                    isOpen={sidebarOpen}
+                    isCollapsed={sidebarCollapsed}
+                    onClose={() => setSidebarOpen(false)}
+                    onToggle={handleSidebarToggle}
+                    onlineUsers={onlineUsers}
+                    onExitRoom={handleSessionExpired}
+                    onLogout={handleSessionExpired}
+                    onDeleteRoom={handleSessionExpired}
+                />
+            )}
         </div>
     );
 }

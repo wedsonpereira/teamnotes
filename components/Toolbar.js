@@ -111,6 +111,8 @@ const TOOLTIP_DESCRIPTIONS = {
     "Dark Mode": "Switch the interface to dark theme.",
     "More Tools": "Open extra toolbar controls on small screens.",
     "Advanced Options": "Open theme, font, and notepad settings.",
+    "Float Note Window": "Open the current note in a browser-floating mini window that stays visible while you work elsewhere.",
+    "Close Floating Note": "Close the browser-floating note window.",
     "Primary Accent": "Change the main interface accent color.",
     "Secondary Accent": "Change the secondary accent color.",
     "Interface Font": "Change the font used by the app interface.",
@@ -123,6 +125,12 @@ const EMOJI_LIST = [
     "😀", "😁", "😂", "🤣", "😊", "😍", "🤩", "😎", "🤔", "😴", "😭", "🤯",
     "👍", "👏", "🙌", "🙏", "💡", "🔥", "✅", "❌", "🎉", "🧠", "🚀", "📌",
     "📎", "📁", "📝", "📣", "⚡", "🌟", "💬", "❤️", "🎯", "📊", "⌛", "👀",
+];
+
+const FLOATING_PLACEMENT_OPTIONS = [
+    { value: "middle", label: "Middle", row: 2, column: 2 },
+    { value: "left-bottom", label: "Left bottom", row: 3, column: 1 },
+    { value: "right-bottom", label: "Right bottom", row: 3, column: 3 },
 ];
 
 function describeTool(tip) {
@@ -154,7 +162,7 @@ function RichTooltipContent({ tip }) {
     );
 }
 
-function TipBtn({ tip, className, onClick, onMouseDown, children, style }) {
+function TipBtn({ tip, className, onClick, onMouseDown, onMouseEnter, children, style }) {
     const describedTip = describeTool(tip);
 
     return (
@@ -164,6 +172,7 @@ function TipBtn({ tip, className, onClick, onMouseDown, children, style }) {
             aria-label={describedTip}
             onClick={onClick}
             onMouseDown={onMouseDown}
+            onMouseEnter={onMouseEnter}
             type="button"
             style={style}
         >
@@ -249,6 +258,11 @@ export default function Toolbar({
     onChangeAccentSecondary,
     uiFontFamily,
     onChangeUiFontFamily,
+    floatingPlacement = "right-bottom",
+    onChangeFloatingPlacement,
+    isFloatingWindow = false,
+    isEmbeddedFloating = false,
+    onToggleFloatingWindow,
 }) {
     const [editor, setEditor] = useState(null);
     const [showAdvanced, setShowAdvanced] = useState(false);
@@ -263,6 +277,9 @@ export default function Toolbar({
     const [paragraphNoSpaceAfter, setParagraphNoSpaceAfter] = useState(false);
     const [isCompactToolbar, setIsCompactToolbar] = useState(false);
     const [showCompactMenu, setShowCompactMenu] = useState(false);
+    const [showFloatingPlacementPicker, setShowFloatingPlacementPicker] = useState(false);
+    const [floatingPlacementPosition, setFloatingPlacementPosition] = useState({ top: 0, left: 0 });
+    const [hoveredFloatingPlacement, setHoveredFloatingPlacement] = useState(null);
     const [showTablePicker, setShowTablePicker] = useState(false);
     const [tablePosition, setTablePosition] = useState({ top: 0, left: 0 });
     const [tableRows, setTableRows] = useState(3);
@@ -273,16 +290,19 @@ export default function Toolbar({
     const advancedBtnRef = useRef(null);
     const advancedPortalRef = useRef(null);
     const compactMenuWrapRef = useRef(null);
-    const primaryToolbarRef = useRef(null);
+    const toolbarShellRef = useRef(null);
+    const toolbarRoomInfoRef = useRef(null);
     const emojiRef = useRef(null);
     const emojiBtnRef = useRef(null);
     const emojiPortalRef = useRef(null);
     const tableRef = useRef(null);
     const tableBtnRef = useRef(null);
     const tablePortalRef = useRef(null);
+    const floatingPlacementPortalRef = useRef(null);
     const imageInputRef = useRef(null);
     const fileInputRef = useRef(null);
     const savedSelectionRef = useRef(null);
+    const floatingPlacementWrapRef = useRef(null);
 
     const saveEditorSelection = useCallback(() => {
         if (editor) {
@@ -331,9 +351,10 @@ export default function Toolbar({
         if (typeof window === "undefined") return;
 
         const updateCompactMode = () => {
-            const toolbarWidth = primaryToolbarRef.current?.getBoundingClientRect().width;
+            const toolbarWidth = toolbarShellRef.current?.getBoundingClientRect().width;
+            const roomInfoWidth = toolbarRoomInfoRef.current?.getBoundingClientRect().width || 0;
             const width = Number.isFinite(toolbarWidth) && toolbarWidth > 0
-                ? toolbarWidth
+                ? Math.max(toolbarWidth - roomInfoWidth - 12, 0)
                 : window.innerWidth;
             setIsCompactToolbar(width <= COMPACT_TOOLBAR_MAX_WIDTH);
         };
@@ -341,9 +362,12 @@ export default function Toolbar({
         updateCompactMode();
         window.addEventListener("resize", updateCompactMode);
         let resizeObserver = null;
-        if (typeof ResizeObserver !== "undefined" && primaryToolbarRef.current) {
+        if (typeof ResizeObserver !== "undefined" && toolbarShellRef.current) {
             resizeObserver = new ResizeObserver(updateCompactMode);
-            resizeObserver.observe(primaryToolbarRef.current);
+            resizeObserver.observe(toolbarShellRef.current);
+            if (toolbarRoomInfoRef.current) {
+                resizeObserver.observe(toolbarRoomInfoRef.current);
+            }
         }
 
         return () => {
@@ -384,6 +408,13 @@ export default function Toolbar({
                 (!tablePortalRef.current || !tablePortalRef.current.contains(target))
             ) {
                 setShowTablePicker(false);
+            }
+            if (
+                floatingPlacementWrapRef.current &&
+                !floatingPlacementWrapRef.current.contains(target) &&
+                (!floatingPlacementPortalRef.current || !floatingPlacementPortalRef.current.contains(target))
+            ) {
+                setShowFloatingPlacementPicker(false);
             }
         };
 
@@ -504,6 +535,21 @@ export default function Toolbar({
         setShowAdvanced((prev) => !prev);
     };
 
+    const openFloatingPlacementFromAnchor = (anchorElement) => {
+        if (!anchorElement) return;
+
+        const rect = anchorElement.getBoundingClientRect();
+        const popoverWidth = 220;
+        const horizontalPadding = 12;
+        const left = Math.max(
+            horizontalPadding,
+            Math.min(rect.right - popoverWidth, window.innerWidth - popoverWidth - horizontalPadding)
+        );
+        const top = Math.max(12, rect.top - 196);
+        setFloatingPlacementPosition({ top, left });
+        setShowFloatingPlacementPicker(true);
+    };
+
     const insertEmoji = (emoji) => {
         if (!editor) return;
         editor.chain().focus().insertContent(emoji).run();
@@ -515,6 +561,14 @@ export default function Toolbar({
         if (!Number.isFinite(parsed)) return 1;
         return Math.min(Math.max(parsed, 1), max);
     };
+
+    const selectedFloatingPlacementLabel =
+        FLOATING_PLACEMENT_OPTIONS.find((option) => option.value === floatingPlacement)?.label ||
+        "Right bottom";
+    const previewFloatingPlacement =
+        FLOATING_PLACEMENT_OPTIONS.find((option) => option.value === hoveredFloatingPlacement) ||
+        FLOATING_PLACEMENT_OPTIONS.find((option) => option.value === floatingPlacement) ||
+        FLOATING_PLACEMENT_OPTIONS[2];
 
     const insertTable = (rows = tableRows, columns = tableColumns) => {
         if (!editor) return;
@@ -888,9 +942,8 @@ export default function Toolbar({
     };
 
     return (
-        <div className="editor-toolbar">
+        <div className="editor-toolbar" ref={toolbarShellRef}>
             <div
-                ref={primaryToolbarRef}
                 className={`toolbar-primary ${isCompactToolbar ? "toolbar-primary-compact" : ""}`}
             >
                 {activeTableRange && (
@@ -912,7 +965,7 @@ export default function Toolbar({
 	                <div className="toolbar-group toolbar-group-font">
 	                    <RichTipWrap tip="Font Family">
 	                        <select
-	                            className="toolbar-select"
+	                            className="toolbar-select toolbar-select-font"
 	                            value={activeFontFamily}
 	                            onMouseDown={saveEditorSelection}
 	                            onFocus={saveEditorSelection}
@@ -1324,17 +1377,6 @@ export default function Toolbar({
                                     >
                                         <i className={theme === "dark" ? "fa-regular fa-sun" : "fa-regular fa-moon"} />
                                     </TipBtn>
-                                    <TipBtn
-                                        tip="Advanced Options"
-                                        className="toolbar-btn"
-                                        onClick={(event) => {
-                                            event.stopPropagation();
-                                            openAdvancedFromAnchor(event.currentTarget);
-                                            setShowCompactMenu(false);
-                                        }}
-                                    >
-                                        <i className="fa-solid fa-gear" />
-                                    </TipBtn>
                                 </div>
                             </div>
                         )}
@@ -1464,23 +1506,7 @@ export default function Toolbar({
                     document.body
                 )}
 
-                <div className="advanced-dropdown-wrapper" ref={dropdownRef}>
-                    {!isCompactToolbar && (
-                        <span ref={advancedBtnRef} style={{ display: "inline-flex" }}>
-                            <TipBtn
-                                tip="Advanced Options"
-                                className="toolbar-btn"
-                                onClick={(event) => {
-                                    event.stopPropagation();
-                                    openAdvancedFromAnchor(event.currentTarget);
-                                }}
-                            >
-                                <i className="fa-solid fa-gear" />
-                            </TipBtn>
-                        </span>
-                    )}
-
-                    {showAdvanced && ReactDOM.createPortal(
+                {showAdvanced && ReactDOM.createPortal(
                         <div
                             className="advanced-dropdown"
                             ref={advancedPortalRef}
@@ -1606,10 +1632,9 @@ export default function Toolbar({
                         </div>,
                         document.body
                     )}
-                </div>
             </div>
 
-            <div className="toolbar-room-info">
+            <div className="toolbar-room-info" ref={toolbarRoomInfoRef}>
                 <span className="room-name">{roomName || "Untitled Room"}</span>
 
                 <span className="save-status">
@@ -1622,6 +1647,39 @@ export default function Toolbar({
                     {connected ? "Live" : "Offline"}
                 </span>
 
+                <div className="advanced-dropdown-wrapper toolbar-settings-action" ref={dropdownRef}>
+                    <span ref={advancedBtnRef} style={{ display: "inline-flex" }}>
+                        <TipBtn
+                            tip="Advanced Options"
+                            className={`toolbar-btn ${showAdvanced ? "active" : ""}`}
+                            onClick={(event) => {
+                                event.stopPropagation();
+                                openAdvancedFromAnchor(event.currentTarget);
+                            }}
+                        >
+                            <i className="fa-solid fa-gear" />
+                        </TipBtn>
+                    </span>
+                </div>
+
+                <div className="floating-placement-wrap" ref={floatingPlacementWrapRef}>
+                    <TipBtn
+                        tip={isFloatingWindow ? "Close Floating Note" : "Float Note Window"}
+                        className={`toolbar-btn ${isFloatingWindow ? "active" : ""}`}
+                        onClick={onToggleFloatingWindow}
+                        onMouseDown={(event) => {
+                            if (isFloatingWindow) return;
+                            event.stopPropagation();
+                        }}
+                        onMouseEnter={(event) => {
+                            if (isFloatingWindow) return;
+                            openFloatingPlacementFromAnchor(event.currentTarget);
+                        }}
+                    >
+                        <i className={isFloatingWindow || isEmbeddedFloating ? "fa-solid fa-xmark" : "fa-regular fa-window-restore"} />
+                    </TipBtn>
+                </div>
+
                 {typingUsers.length > 0 && (
                     <span className="typing-indicator">
                         {typingUsers[0]}
@@ -1629,6 +1687,66 @@ export default function Toolbar({
                     </span>
                 )}
             </div>
+            {!isFloatingWindow && showFloatingPlacementPicker && ReactDOM.createPortal(
+                <div
+                    className="floating-placement-popover"
+                    ref={floatingPlacementPortalRef}
+                    role="dialog"
+                    aria-label="Floating window placement"
+                    style={{ top: floatingPlacementPosition.top, left: floatingPlacementPosition.left }}
+                    onMouseEnter={() => setShowFloatingPlacementPicker(true)}
+                    onMouseLeave={(event) => {
+                        if (
+                            floatingPlacementWrapRef.current &&
+                            event.relatedTarget instanceof Node &&
+                            floatingPlacementWrapRef.current.contains(event.relatedTarget)
+                        ) {
+                            return;
+                        }
+                        setHoveredFloatingPlacement(null);
+                        setShowFloatingPlacementPicker(false);
+                    }}
+                >
+                    <div className="floating-placement-title">Floating window position</div>
+	                    <div className="floating-placement-preview">
+	                        <div className="floating-placement-screen">
+	                            {FLOATING_PLACEMENT_OPTIONS.map((option) => (
+	                                <button
+	                                    key={option.value}
+                                    type="button"
+                                    className={`floating-placement-node ${floatingPlacement === option.value ? "active" : ""}`}
+                                    style={{
+                                        gridRow: option.row,
+                                        gridColumn: option.column,
+                                    }}
+                                    onMouseEnter={() => setHoveredFloatingPlacement(option.value)}
+                                    onFocus={() => setHoveredFloatingPlacement(option.value)}
+                                    onClick={(event) => {
+                                        event.preventDefault();
+                                        event.stopPropagation();
+                                        onChangeFloatingPlacement?.(option.value);
+                                        onToggleFloatingWindow?.(option.value);
+                                        setShowFloatingPlacementPicker(false);
+                                    }}
+                                    aria-label={`Place floating window at ${option.label}`}
+                                    title={`Place floating window at ${option.label}`}
+                                >
+                                    <span />
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+	                    <div className="floating-placement-current">{selectedFloatingPlacementLabel}</div>
+                </div>,
+                document.body
+            )}
+            {!isFloatingWindow && showFloatingPlacementPicker && hoveredFloatingPlacement && previewFloatingPlacement && ReactDOM.createPortal(
+                <div
+                    className={`floating-placement-browser-ghost placement-${previewFloatingPlacement.value}`}
+                    aria-hidden="true"
+                />,
+                document.body
+            )}
         </div>
     );
 }
