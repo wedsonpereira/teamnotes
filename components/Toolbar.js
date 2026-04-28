@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, useLayoutEffect } from "react";
 import ReactDOM from "react-dom";
 
 const BG_COLORS = [
@@ -37,7 +37,7 @@ const FONT_COLORS = [
 ];
 
 const TEXT_FONT_OPTIONS = [
-    { label: "Font", value: "default" },
+    { label: "Default (JetBrains)", value: "default" },
     { label: "Montserrat", value: "'Montserrat', sans-serif" },
     { label: "Playfair", value: "'Playfair Display', serif" },
     { label: "JetBrains Mono", value: "'JetBrains Mono', monospace" },
@@ -49,7 +49,7 @@ const TEXT_FONT_OPTIONS = [
 ];
 
 const UI_FONT_OPTIONS = [
-    { label: "Default UI", value: "default" },
+    { label: "Default UI (JetBrains)", value: "default" },
     { label: "Montserrat", value: "'Montserrat', sans-serif" },
     { label: "Playfair", value: "'Playfair Display', serif" },
     { label: "JetBrains Mono", value: "'JetBrains Mono', monospace" },
@@ -76,6 +76,7 @@ const MAX_TABLE_ROWS = 20;
 const MAX_TABLE_COLUMNS = 12;
 const TABLE_PICKER_ROWS = 8;
 const TABLE_PICKER_COLUMNS = 8;
+const CASHFREE_SDK_SRC = "https://sdk.cashfree.com/js/v3/cashfree.js";
 
 const TOOLTIP_DESCRIPTIONS = {
     "Delete Table": "Remove the selected table from the page.",
@@ -113,6 +114,7 @@ const TOOLTIP_DESCRIPTIONS = {
     "Advanced Options": "Open theme, font, and notepad settings.",
     "Float Note Window": "Open the current note in a browser-floating mini window that stays visible while you work elsewhere.",
     "Close Floating Note": "Close the browser-floating note window.",
+    "Buy Me a Meal": "Open secure checkout options.",
     "Primary Accent": "Change the main interface accent color.",
     "Secondary Accent": "Change the secondary accent color.",
     "Interface Font": "Change the font used by the app interface.",
@@ -133,10 +135,40 @@ const FLOATING_PLACEMENT_OPTIONS = [
     { value: "right-bottom", label: "Right bottom", row: 3, column: 3 },
 ];
 
+function clampNumber(value, min, max) {
+    return Math.min(Math.max(value, min), max);
+}
+
 function describeTool(tip) {
     if (!tip) return "";
     const description = TOOLTIP_DESCRIPTIONS[tip];
     return description ? `${tip}: ${description}` : tip;
+}
+
+function loadCashfreeSdk() {
+    if (typeof window === "undefined") {
+        return Promise.reject(new Error("Cashfree checkout is unavailable on the server."));
+    }
+
+    if (window.Cashfree) {
+        return Promise.resolve(window.Cashfree);
+    }
+
+    return new Promise((resolve, reject) => {
+        const existingScript = document.querySelector(`script[src="${CASHFREE_SDK_SRC}"]`);
+        if (existingScript) {
+            existingScript.addEventListener("load", () => resolve(window.Cashfree), { once: true });
+            existingScript.addEventListener("error", () => reject(new Error("Failed to load Cashfree checkout.")), { once: true });
+            return;
+        }
+
+        const script = document.createElement("script");
+        script.src = CASHFREE_SDK_SRC;
+        script.async = true;
+        script.onload = () => resolve(window.Cashfree);
+        script.onerror = () => reject(new Error("Failed to load Cashfree checkout."));
+        document.head.appendChild(script);
+    });
 }
 
 function getTooltipParts(tip) {
@@ -147,49 +179,128 @@ function getTooltipParts(tip) {
     };
 }
 
-function RichTooltipContent({ tip }) {
+function RichTooltipBody({ tip }) {
     const { title, description } = getTooltipParts(tip);
 
     if (!title) return null;
 
     return (
-        <span className="rich-tooltip" role="tooltip">
+        <>
             <span className="rich-tooltip-title">{title}</span>
             {description && (
                 <span className="rich-tooltip-text">{description}</span>
             )}
-        </span>
+        </>
     );
 }
 
-function TipBtn({ tip, className, onClick, onMouseDown, onMouseEnter, children, style }) {
+function TipBtn({ tip, className, onClick, onMouseDown, onMouseEnter, children, style, showTooltip = true }) {
     const describedTip = describeTool(tip);
+    const tooltipAnchorRef = useRef(null);
+    const [showPortalTooltip, setShowPortalTooltip] = useState(false);
 
     return (
-        <button
-            className={`${className || ""} has-tooltip`}
-            data-tip={describedTip}
-            aria-label={describedTip}
-            onClick={onClick}
-            onMouseDown={onMouseDown}
-            onMouseEnter={onMouseEnter}
-            type="button"
-            style={style}
-        >
-            {children}
-            <RichTooltipContent tip={tip} />
-        </button>
+        <>
+            <button
+                ref={tooltipAnchorRef}
+                className={className || ""}
+                data-tip={describedTip}
+                aria-label={describedTip}
+                onClick={(event) => {
+                    setShowPortalTooltip(false);
+                    onClick?.(event);
+                }}
+                onMouseDown={(event) => {
+                    setShowPortalTooltip(false);
+                    onMouseDown?.(event);
+                }}
+                onMouseEnter={(event) => {
+                    if (showTooltip) setShowPortalTooltip(true);
+                    onMouseEnter?.(event);
+                }}
+                onMouseLeave={() => setShowPortalTooltip(false)}
+                type="button"
+                style={style}
+            >
+                {children}
+            </button>
+            {showTooltip && (
+                <PortalTooltip
+                    tip={tip}
+                    anchorRef={tooltipAnchorRef}
+                    visible={showPortalTooltip}
+                />
+            )}
+        </>
     );
 }
 
 function RichTipWrap({ tip, children }) {
     const describedTip = describeTool(tip);
+    const tooltipAnchorRef = useRef(null);
+    const [showPortalTooltip, setShowPortalTooltip] = useState(false);
 
     return (
-        <span className="toolbar-tooltip-wrap has-tooltip" aria-label={describedTip}>
+        <span
+            ref={tooltipAnchorRef}
+            className="toolbar-tooltip-wrap"
+            aria-label={describedTip}
+            onMouseEnter={() => setShowPortalTooltip(true)}
+            onMouseLeave={() => setShowPortalTooltip(false)}
+            onPointerDown={() => setShowPortalTooltip(false)}
+        >
             {children}
-            <RichTooltipContent tip={tip} />
+            <PortalTooltip
+                tip={tip}
+                anchorRef={tooltipAnchorRef}
+                visible={showPortalTooltip}
+            />
         </span>
+    );
+}
+
+function PortalTooltip({ tip, anchorRef, visible }) {
+    const [position, setPosition] = useState(null);
+
+    const updatePosition = useCallback(() => {
+        const anchor = anchorRef.current;
+        if (!anchor) return;
+
+        const rect = anchor.getBoundingClientRect();
+        const tooltipHalfWidth = 132;
+        setPosition({
+            top: rect.bottom + 10,
+            left: Math.max(
+                tooltipHalfWidth + 8,
+                Math.min(rect.left + rect.width / 2, window.innerWidth - tooltipHalfWidth - 8)
+            ),
+        });
+    }, [anchorRef]);
+
+    useEffect(() => {
+        if (!visible) return undefined;
+
+        updatePosition();
+        window.addEventListener("scroll", updatePosition, true);
+        window.addEventListener("resize", updatePosition);
+
+        return () => {
+            window.removeEventListener("scroll", updatePosition, true);
+            window.removeEventListener("resize", updatePosition);
+        };
+    }, [updatePosition, visible]);
+
+    if (!visible || !position || typeof document === "undefined") return null;
+
+    return ReactDOM.createPortal(
+        <span
+            className="rich-tooltip rich-tooltip-portal"
+            role="tooltip"
+            style={{ top: position.top, left: position.left }}
+        >
+            <RichTooltipBody tip={tip} />
+        </span>,
+        document.body
     );
 }
 
@@ -263,6 +374,9 @@ export default function Toolbar({
     isFloatingWindow = false,
     isEmbeddedFloating = false,
     onToggleFloatingWindow,
+    sidebarCollapsed = false,
+    sidebarOpen = false,
+    onToggleSidebar,
 }) {
     const [editor, setEditor] = useState(null);
     const [showAdvanced, setShowAdvanced] = useState(false);
@@ -276,6 +390,8 @@ export default function Toolbar({
     const [activeParagraphLineSpacing, setActiveParagraphLineSpacing] = useState("default");
     const [paragraphNoSpaceAfter, setParagraphNoSpaceAfter] = useState(false);
     const [isCompactToolbar, setIsCompactToolbar] = useState(false);
+    const [isMobileToolbar, setIsMobileToolbar] = useState(false);
+    const [isMobileToolsHidden, setIsMobileToolsHidden] = useState(false);
     const [showCompactMenu, setShowCompactMenu] = useState(false);
     const [showFloatingPlacementPicker, setShowFloatingPlacementPicker] = useState(false);
     const [floatingPlacementPosition, setFloatingPlacementPosition] = useState({ top: 0, left: 0 });
@@ -285,6 +401,9 @@ export default function Toolbar({
     const [tableRows, setTableRows] = useState(3);
     const [tableColumns, setTableColumns] = useState(3);
     const [activeTableRange, setActiveTableRange] = useState(null);
+    const [showDonateModal, setShowDonateModal] = useState(false);
+    const [donationProvider, setDonationProvider] = useState(null);
+    const [donationError, setDonationError] = useState("");
 
     const dropdownRef = useRef(null);
     const advancedBtnRef = useRef(null);
@@ -310,6 +429,65 @@ export default function Toolbar({
             savedSelectionRef.current = { from, to };
         }
     }, [editor]);
+
+    const startDonationCheckout = useCallback(async (provider) => {
+        setDonationProvider(provider);
+        setDonationError("");
+
+        try {
+            const response = await fetch(`/api/donations/${provider}`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+            });
+            const data = await response.json().catch(() => ({}));
+
+            if (!response.ok) {
+                throw new Error(data.error || "Unable to start checkout. Please try again.");
+            }
+
+            if (provider === "stripe") {
+                if (!data.url) {
+                    throw new Error("Stripe did not return a checkout URL.");
+                }
+                window.location.assign(data.url);
+                return;
+            }
+
+            if (provider === "paypal") {
+                if (!data.url) {
+                    throw new Error("PayPal did not return a checkout URL.");
+                }
+                window.location.assign(data.url);
+                return;
+            }
+
+            if (provider === "cashfree") {
+                if (!data.paymentSessionId) {
+                    throw new Error("Cashfree did not return a payment session.");
+                }
+
+                const Cashfree = await loadCashfreeSdk();
+                if (!Cashfree) {
+                    throw new Error("Cashfree checkout is unavailable.");
+                }
+
+                const cashfree = Cashfree({
+                    mode: data.environment === "production" ? "production" : "sandbox",
+                });
+                await cashfree.checkout({
+                    paymentSessionId: data.paymentSessionId,
+                    redirectTarget: "_modal",
+                });
+                return;
+            }
+
+            throw new Error("Unknown checkout provider.");
+        } catch (error) {
+            setDonationError(error.message || "Unable to start checkout. Please try again.");
+        } finally {
+            setDonationProvider(null);
+        }
+    }, []);
 
     const getActiveTableRange = useCallback((editorInstance = editor) => {
         const selection = editorInstance?.state?.selection;
@@ -350,11 +528,53 @@ export default function Toolbar({
     useEffect(() => {
         if (typeof window === "undefined") return;
 
+        const mediaQuery = window.matchMedia("(max-width: 900px)");
+        const updateMobileToolbar = () => setIsMobileToolbar(mediaQuery.matches);
+
+        updateMobileToolbar();
+        if (typeof mediaQuery.addEventListener === "function") {
+            mediaQuery.addEventListener("change", updateMobileToolbar);
+            return () => mediaQuery.removeEventListener("change", updateMobileToolbar);
+        }
+
+        mediaQuery.addListener(updateMobileToolbar);
+        return () => mediaQuery.removeListener(updateMobileToolbar);
+    }, []);
+
+    useEffect(() => {
+        if (!isMobileToolbar) {
+            setIsMobileToolsHidden(false);
+        }
+    }, [isMobileToolbar]);
+
+    useEffect(() => {
+        if (typeof document === "undefined") return undefined;
+
+        const root = document.documentElement;
+        if (isMobileToolbar && isMobileToolsHidden) {
+            root.setAttribute("data-mobile-tools-hidden", "true");
+        } else {
+            root.removeAttribute("data-mobile-tools-hidden");
+        }
+
+        return () => {
+            root.removeAttribute("data-mobile-tools-hidden");
+        };
+    }, [isMobileToolbar, isMobileToolsHidden]);
+
+    useEffect(() => {
+        if (typeof window === "undefined") return;
+
         const updateCompactMode = () => {
-            const toolbarWidth = toolbarShellRef.current?.getBoundingClientRect().width;
+            const toolbarShell = toolbarShellRef.current;
+            const toolbarWidth = toolbarShell?.getBoundingClientRect().width;
             const roomInfoWidth = toolbarRoomInfoRef.current?.getBoundingClientRect().width || 0;
+            const toolbarGap = toolbarShell
+                ? Number.parseFloat(window.getComputedStyle(toolbarShell).columnGap || "0") || 0
+                : 0;
+            const reservedWidth = roomInfoWidth + toolbarGap;
             const width = Number.isFinite(toolbarWidth) && toolbarWidth > 0
-                ? Math.max(toolbarWidth - roomInfoWidth - 12, 0)
+                ? Math.max(toolbarWidth - reservedWidth, 0)
                 : window.innerWidth;
             setIsCompactToolbar(width <= COMPACT_TOOLBAR_MAX_WIDTH);
         };
@@ -377,10 +597,10 @@ export default function Toolbar({
     }, []);
 
     useEffect(() => {
-        if (!isCompactToolbar) {
+        if (!isCompactToolbar || isMobileToolbar) {
             setShowCompactMenu(false);
         }
-    }, [isCompactToolbar]);
+    }, [isCompactToolbar, isMobileToolbar]);
 
     useEffect(() => {
         const handleClick = (event) => {
@@ -504,10 +724,17 @@ export default function Toolbar({
         fileInputRef.current?.click();
     };
 
+    const shouldUseCompactToolbar = isCompactToolbar && !isMobileToolbar;
+
     const openEmojiPickerFromAnchor = (anchorElement) => {
         if (!anchorElement) return;
         const rect = anchorElement.getBoundingClientRect();
-        setEmojiPosition({ top: rect.bottom + 8, left: rect.left });
+        setEmojiPosition({
+            top: isMobileToolbar ? rect.top : rect.bottom + 8,
+            left: isMobileToolbar
+                ? clampNumber(rect.right + 8, 8, Math.max(8, window.innerWidth - 248))
+                : rect.left,
+        });
         setShowEmojiPicker((prev) => !prev);
     };
 
@@ -515,8 +742,10 @@ export default function Toolbar({
         if (!anchorElement) return;
         const rect = anchorElement.getBoundingClientRect();
         setTablePosition({
-            top: rect.bottom + 8,
-            left: Math.min(rect.left, window.innerWidth - 292),
+            top: isMobileToolbar ? rect.top : rect.bottom + 8,
+            left: isMobileToolbar
+                ? clampNumber(rect.right + 8, 8, Math.max(8, window.innerWidth - 292))
+                : Math.min(rect.left, window.innerWidth - 292),
         });
         setShowTablePicker((prev) => !prev);
         setShowEmojiPicker(false);
@@ -527,28 +756,110 @@ export default function Toolbar({
 
         if (!showAdvanced) {
             const rect = anchorElement.getBoundingClientRect();
+            const dropdownWidth = 260;
+            const estimatedDropdownHeight = 520;
+            const viewportPadding = 12;
+            const triggerGap = 12;
+            const maxTop = Math.max(
+                viewportPadding,
+                window.innerHeight - Math.min(estimatedDropdownHeight, window.innerHeight - viewportPadding * 2) - viewportPadding
+            );
+            const canOpenAbove = rect.top - estimatedDropdownHeight - triggerGap >= viewportPadding;
             setAdvancedPosition({
-                top: rect.bottom + 8,
-                right: window.innerWidth - rect.right,
+                top: clampNumber(
+                    canOpenAbove ? rect.top - estimatedDropdownHeight - triggerGap : rect.bottom + triggerGap,
+                    viewportPadding,
+                    maxTop
+                ),
+                right: "auto",
+                left: clampNumber(
+                    rect.right - dropdownWidth,
+                    viewportPadding,
+                    Math.max(viewportPadding, window.innerWidth - dropdownWidth - viewportPadding)
+                ),
             });
         }
         setShowAdvanced((prev) => !prev);
     };
 
-    const openFloatingPlacementFromAnchor = (anchorElement) => {
+    const getFloatingPlacementPosition = useCallback((anchorElement, popoverElement = null) => {
         if (!anchorElement) return;
 
         const rect = anchorElement.getBoundingClientRect();
-        const popoverWidth = 220;
-        const horizontalPadding = 12;
-        const left = Math.max(
-            horizontalPadding,
-            Math.min(rect.right - popoverWidth, window.innerWidth - popoverWidth - horizontalPadding)
+        const viewportPadding = 12;
+        const triggerGap = 12;
+        const popoverRect = popoverElement?.getBoundingClientRect();
+        const popoverWidth = popoverRect?.width || 188;
+        const popoverHeight = popoverRect?.height || 220;
+        const left = clampNumber(
+            rect.right - popoverWidth,
+            viewportPadding,
+            Math.max(viewportPadding, window.innerWidth - popoverWidth - viewportPadding)
         );
-        const top = Math.max(12, rect.top - 196);
-        setFloatingPlacementPosition({ top, left });
+
+        const topAbove = rect.top - popoverHeight - triggerGap;
+        const topBelow = rect.bottom + triggerGap;
+        const canOpenAbove = topAbove >= viewportPadding;
+        const preferredTop = canOpenAbove ? topAbove : topBelow;
+        const top = clampNumber(
+            preferredTop,
+            viewportPadding,
+            Math.max(viewportPadding, window.innerHeight - popoverHeight - viewportPadding)
+        );
+
+        return { top, left };
+    }, []);
+
+    const openFloatingPlacementFromAnchor = (anchorElement) => {
+        const nextPosition = getFloatingPlacementPosition(anchorElement);
+        if (!nextPosition) return;
+
+        setFloatingPlacementPosition(nextPosition);
         setShowFloatingPlacementPicker(true);
     };
+
+    const updateFloatingPlacementPosition = useCallback(() => {
+        const anchorElement = floatingPlacementWrapRef.current;
+        const popoverElement = floatingPlacementPortalRef.current;
+        const nextPosition = getFloatingPlacementPosition(anchorElement, popoverElement);
+        if (!nextPosition) return;
+
+        setFloatingPlacementPosition((currentPosition) => (
+            currentPosition.top === nextPosition.top && currentPosition.left === nextPosition.left
+                ? currentPosition
+                : nextPosition
+        ));
+    }, [getFloatingPlacementPosition]);
+
+    useLayoutEffect(() => {
+        if (!showFloatingPlacementPicker) return;
+        updateFloatingPlacementPosition();
+    }, [showFloatingPlacementPicker, updateFloatingPlacementPosition]);
+
+    useEffect(() => {
+        if (!showFloatingPlacementPicker) return undefined;
+
+        window.addEventListener("resize", updateFloatingPlacementPosition);
+        window.addEventListener("scroll", updateFloatingPlacementPosition, true);
+
+        return () => {
+            window.removeEventListener("resize", updateFloatingPlacementPosition);
+            window.removeEventListener("scroll", updateFloatingPlacementPosition, true);
+        };
+    }, [showFloatingPlacementPicker, updateFloatingPlacementPosition]);
+
+    useEffect(() => {
+        if (!showFloatingPlacementPicker || typeof ResizeObserver === "undefined") return undefined;
+        const anchorElement = floatingPlacementWrapRef.current;
+        const popoverElement = floatingPlacementPortalRef.current;
+        if (!anchorElement && !popoverElement) return undefined;
+
+        const resizeObserver = new ResizeObserver(updateFloatingPlacementPosition);
+        if (anchorElement) resizeObserver.observe(anchorElement);
+        if (popoverElement) resizeObserver.observe(popoverElement);
+
+        return () => resizeObserver.disconnect();
+    }, [showFloatingPlacementPicker, updateFloatingPlacementPosition]);
 
     const insertEmoji = (emoji) => {
         if (!editor) return;
@@ -942,9 +1253,13 @@ export default function Toolbar({
     };
 
     return (
-        <div className="editor-toolbar" ref={toolbarShellRef}>
+        <>
             <div
-                className={`toolbar-primary ${isCompactToolbar ? "toolbar-primary-compact" : ""}`}
+                className={`editor-toolbar ${isMobileToolbar ? "editor-toolbar-mobile-tools" : ""} ${isMobileToolsHidden ? "mobile-tools-hidden" : ""}`}
+                ref={toolbarShellRef}
+            >
+            <div
+                className={`toolbar-primary ${shouldUseCompactToolbar ? "toolbar-primary-compact" : ""}`}
             >
                 {activeTableRange && (
                     <>
@@ -999,7 +1314,7 @@ export default function Toolbar({
 	                    </RichTipWrap>
 	                </div>
 
-                {!isCompactToolbar && (
+                {!shouldUseCompactToolbar && (
                     <>
                         <div className="toolbar-divider" />
 
@@ -1178,18 +1493,11 @@ export default function Toolbar({
                             <TipBtn tip="Redo" className="toolbar-btn" onClick={() => editor?.chain().focus().redo().run()}>
                                 <i className="fa-solid fa-rotate-right" />
                             </TipBtn>
-                            <TipBtn
-                                tip={theme === "dark" ? "Light Mode" : "Dark Mode"}
-                                className="theme-toggle-btn"
-                                onClick={onToggleTheme}
-                            >
-                                <i className={theme === "dark" ? "fa-regular fa-sun" : "fa-regular fa-moon"} />
-                            </TipBtn>
                         </div>
                     </>
                 )}
 
-                {isCompactToolbar && (
+                {shouldUseCompactToolbar && (
                     <div className="toolbar-group toolbar-compact-more" ref={compactMenuWrapRef}>
                         <TipBtn
                             tip="More Tools"
@@ -1370,13 +1678,6 @@ export default function Toolbar({
                                     <TipBtn tip="Redo" className="toolbar-btn" onClick={() => editor?.chain().focus().redo().run()}>
                                         <i className="fa-solid fa-rotate-right" />
                                     </TipBtn>
-                                    <TipBtn
-                                        tip={theme === "dark" ? "Light Mode" : "Dark Mode"}
-                                        className="theme-toggle-btn"
-                                        onClick={onToggleTheme}
-                                    >
-                                        <i className={theme === "dark" ? "fa-regular fa-sun" : "fa-regular fa-moon"} />
-                                    </TipBtn>
                                 </div>
                             </div>
                         )}
@@ -1510,7 +1811,11 @@ export default function Toolbar({
                         <div
                             className="advanced-dropdown"
                             ref={advancedPortalRef}
-                            style={{ top: advancedPosition.top, right: advancedPosition.right }}
+                            style={{
+                                top: advancedPosition.top,
+                                right: advancedPosition.right,
+                                left: advancedPosition.left,
+                            }}
                         >
                             <div className="advanced-dropdown-title">
                                 <i className="fa-solid fa-sliders" style={{ marginRight: 6 }} />
@@ -1634,6 +1939,20 @@ export default function Toolbar({
                     )}
             </div>
 
+            <span className="toolbar-donate-wrap toolbar-donate-top">
+                <TipBtn
+                    tip="Buy Me a Meal"
+                    className="toolbar-donate-btn"
+                    onClick={() => {
+                        setDonationError("");
+                        setShowDonateModal(true);
+                    }}
+                >
+                    <i className="fa-solid fa-heart" />
+                    <span>Donate us</span>
+                </TipBtn>
+            </span>
+
             <div className="toolbar-room-info" ref={toolbarRoomInfoRef}>
                 <span className="room-name">{roomName || "Untitled Room"}</span>
 
@@ -1647,11 +1966,48 @@ export default function Toolbar({
                     {connected ? "Live" : "Offline"}
                 </span>
 
+                {typingUsers.length > 0 && (
+                    <span className="typing-indicator">
+                        {typingUsers[0]}
+                        {typingUsers.length > 1 ? ` +${typingUsers.length - 1} more` : ""} typing...
+                    </span>
+                )}
+            </div>
+
+            </div>
+
+            <nav className="bottom-navigation-panel" aria-label="Room actions">
+                {isMobileToolbar && (
+                    <TipBtn
+                        tip={isMobileToolsHidden ? "Show Tools" : "Hide Tools"}
+                        className={`bottom-nav-btn bottom-nav-tools-btn ${!isMobileToolsHidden ? "active" : ""}`}
+                        onClick={() => setIsMobileToolsHidden((prev) => !prev)}
+                    >
+                        <i className="fa-solid fa-screwdriver-wrench" />
+                    </TipBtn>
+                )}
+
+                <TipBtn
+                    tip={sidebarOpen || !sidebarCollapsed ? "Hide Sidebar" : "Open Sidebar"}
+                    className={`bottom-nav-btn bottom-nav-sidebar-btn ${!sidebarCollapsed || sidebarOpen ? "active" : ""}`}
+                    onClick={() => onToggleSidebar?.()}
+                >
+                    <i className="fa-solid fa-table-columns" />
+                </TipBtn>
+
+                <TipBtn
+                    tip={theme === "dark" ? "Light Mode" : "Dark Mode"}
+                    className="bottom-nav-btn theme-toggle-btn"
+                    onClick={onToggleTheme}
+                >
+                    <i className={theme === "dark" ? "fa-regular fa-sun" : "fa-regular fa-moon"} />
+                </TipBtn>
+
                 <div className="advanced-dropdown-wrapper toolbar-settings-action" ref={dropdownRef}>
                     <span ref={advancedBtnRef} style={{ display: "inline-flex" }}>
                         <TipBtn
                             tip="Advanced Options"
-                            className={`toolbar-btn ${showAdvanced ? "active" : ""}`}
+                            className={`bottom-nav-btn ${showAdvanced ? "active" : ""}`}
                             onClick={(event) => {
                                 event.stopPropagation();
                                 openAdvancedFromAnchor(event.currentTarget);
@@ -1662,11 +2018,26 @@ export default function Toolbar({
                     </span>
                 </div>
 
-                <div className="floating-placement-wrap" ref={floatingPlacementWrapRef}>
+                <div
+                    className="floating-placement-wrap"
+                    ref={floatingPlacementWrapRef}
+                    onMouseLeave={(event) => {
+                        if (
+                            floatingPlacementPortalRef.current &&
+                            event.relatedTarget instanceof Node &&
+                            floatingPlacementPortalRef.current.contains(event.relatedTarget)
+                        ) {
+                            return;
+                        }
+                        setHoveredFloatingPlacement(null);
+                        setShowFloatingPlacementPicker(false);
+                    }}
+                >
                     <TipBtn
                         tip={isFloatingWindow ? "Close Floating Note" : "Float Note Window"}
-                        className={`toolbar-btn ${isFloatingWindow ? "active" : ""}`}
+                        className={`bottom-nav-btn ${isFloatingWindow ? "active" : ""}`}
                         onClick={onToggleFloatingWindow}
+                        showTooltip={isFloatingWindow}
                         onMouseDown={(event) => {
                             if (isFloatingWindow) return;
                             event.stopPropagation();
@@ -1680,13 +2051,89 @@ export default function Toolbar({
                     </TipBtn>
                 </div>
 
-                {typingUsers.length > 0 && (
-                    <span className="typing-indicator">
-                        {typingUsers[0]}
-                        {typingUsers.length > 1 ? ` +${typingUsers.length - 1} more` : ""} typing...
+                {isMobileToolbar && (
+                    <span className="toolbar-donate-wrap toolbar-donate-nav">
+                        <TipBtn
+                            tip="Buy Me a Meal"
+                            className="toolbar-donate-btn"
+                            onClick={() => {
+                                setDonationError("");
+                                setShowDonateModal(true);
+                            }}
+                        >
+                            <i className="fa-solid fa-heart" />
+                            <span>Donate us</span>
+                        </TipBtn>
                     </span>
                 )}
-            </div>
+            </nav>
+
+            {showDonateModal && ReactDOM.createPortal(
+                <div
+                    className="modal-overlay donate-modal-overlay"
+                    onClick={(event) => {
+                        if (event.target === event.currentTarget) {
+                            setShowDonateModal(false);
+                            setDonationError("");
+                        }
+                    }}
+                >
+                    <div className="modal-content donate-modal-content">
+                        <button
+                            className="modal-close"
+                            type="button"
+                            onClick={() => {
+                                setShowDonateModal(false);
+                                setDonationError("");
+                            }}
+                            aria-label="Close donation popup"
+                        >
+                            ×
+                        </button>
+                        <h2 className="modal-title">Buy Me a Meal</h2>
+                        <p className="modal-subtitle">
+                            Choose a secure checkout provider to support Teamnote.
+                        </p>
+
+                        <div className="donate-provider-actions">
+                            <button
+                                type="button"
+                                className="donate-provider-btn stripe"
+                                disabled={donationProvider !== null}
+                                onClick={() => startDonationCheckout("stripe")}
+                            >
+                                <i className="fa-brands fa-stripe-s" />
+                                <span>{donationProvider === "stripe" ? "Opening Stripe..." : "Pay with Stripe"}</span>
+                            </button>
+                            <button
+                                type="button"
+                                className="donate-provider-btn paypal"
+                                disabled={donationProvider !== null}
+                                onClick={() => startDonationCheckout("paypal")}
+                            >
+                                <i className="fa-brands fa-paypal" />
+                                <span>{donationProvider === "paypal" ? "Opening PayPal..." : "Pay with PayPal"}</span>
+                            </button>
+                            <button
+                                type="button"
+                                className="donate-provider-btn cashfree"
+                                disabled={donationProvider !== null}
+                                onClick={() => startDonationCheckout("cashfree")}
+                            >
+                                <i className="fa-solid fa-credit-card" />
+                                <span>{donationProvider === "cashfree" ? "Opening Cashfree..." : "Pay with Cashfree"}</span>
+                            </button>
+                        </div>
+
+                        {donationError && (
+                            <div className="donate-error" role="alert">
+                                {donationError}
+                            </div>
+                        )}
+                    </div>
+                </div>,
+                document.body
+            )}
             {!isFloatingWindow && showFloatingPlacementPicker && ReactDOM.createPortal(
                 <div
                     className="floating-placement-popover"
@@ -1708,6 +2155,9 @@ export default function Toolbar({
                     }}
                 >
                     <div className="floating-placement-title">Floating window position</div>
+                    <div className="floating-placement-description">
+                        {TOOLTIP_DESCRIPTIONS["Float Note Window"]}
+                    </div>
 	                    <div className="floating-placement-preview">
 	                        <div className="floating-placement-screen">
 	                            {FLOATING_PLACEMENT_OPTIONS.map((option) => (
@@ -1720,16 +2170,17 @@ export default function Toolbar({
                                         gridColumn: option.column,
                                     }}
                                     onMouseEnter={() => setHoveredFloatingPlacement(option.value)}
-                                    onFocus={() => setHoveredFloatingPlacement(option.value)}
+                                    onMouseLeave={() => setHoveredFloatingPlacement(null)}
+                                    onPointerDown={() => setHoveredFloatingPlacement(null)}
                                     onClick={(event) => {
                                         event.preventDefault();
                                         event.stopPropagation();
+                                        setHoveredFloatingPlacement(null);
+                                        setShowFloatingPlacementPicker(false);
                                         onChangeFloatingPlacement?.(option.value);
                                         onToggleFloatingWindow?.(option.value);
-                                        setShowFloatingPlacementPicker(false);
                                     }}
                                     aria-label={`Place floating window at ${option.label}`}
-                                    title={`Place floating window at ${option.label}`}
                                 >
                                     <span />
                                 </button>
@@ -1747,6 +2198,6 @@ export default function Toolbar({
                 />,
                 document.body
             )}
-        </div>
+        </>
     );
 }

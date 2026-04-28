@@ -31,6 +31,7 @@ export default function Sidebar({
     const [inviteLoading, setInviteLoading] = useState(false);
     const [inviteError, setInviteError] = useState("");
     const [inviteSuccess, setInviteSuccess] = useState("");
+    const [memberActionError, setMemberActionError] = useState("");
 
     const notifySessionExpired = () => {
         if (typeof window !== "undefined") {
@@ -77,7 +78,15 @@ export default function Sidebar({
         };
     }, [socket, fetchMembers]);
 
+    const notifyMembersChanged = useCallback(() => {
+        if (socket) {
+            socket.emit("member-status-changed", { roomId });
+        }
+    }, [roomId, socket]);
+
     const handleMemberAction = async ({ action, memberId, memberUserId }) => {
+        setMemberActionError("");
+
         try {
             const res = await fetch(`/api/rooms/${roomId}/members`, {
                 method: "PATCH",
@@ -100,7 +109,7 @@ export default function Sidebar({
             }
 
             // Refresh & notify
-            fetchMembers();
+            await fetchMembers();
             if (socket) {
                 if (action === "REMOVED" && memberUserId) {
                     socket.emit("member-removed", { roomId, userId: memberUserId });
@@ -108,8 +117,11 @@ export default function Sidebar({
                     socket.emit("member-status-changed", { roomId });
                 }
             }
+            return true;
         } catch (err) {
             console.error("Failed to update member:", err);
+            setMemberActionError(err.message || "Failed to update member.");
+            return false;
         }
     };
 
@@ -167,17 +179,22 @@ export default function Sidebar({
             }
 
             const json = await res.json().catch(() => ({}));
+            if (!res.ok && json.emailSent === false && json.invite) {
+                setInviteError(json.error || "Invite saved, but failed to send email.");
+                setInviteSuccess("Access was saved. Fix email settings, then invite again to resend the email.");
+                await fetchMembers();
+                notifyMembersChanged();
+                return;
+            }
+
             if (!res.ok) {
                 throw new Error(json.error || "Failed to invite teammate.");
             }
 
             setInviteEmail("");
             setInviteSuccess(json.message || "Invite saved.");
-            fetchMembers();
-
-            if (socket) {
-                socket.emit("member-status-changed", { roomId });
-            }
+            await fetchMembers();
+            notifyMembersChanged();
         } catch (err) {
             console.error("Failed to invite teammate:", err);
             setInviteError(err.message || "Failed to invite teammate.");
@@ -214,13 +231,13 @@ export default function Sidebar({
         setRemoveDialogMember(null);
     };
 
-    const confirmRemoveMember = () => {
+    const confirmRemoveMember = async () => {
         if (!removeDialogMember) return;
-        handleMemberAction({
+        const removed = await handleMemberAction({
             action: "REMOVED",
             memberUserId: removeDialogMember.id,
         });
-        closeRemoveDialog();
+        if (removed) closeRemoveDialog();
     };
 
     const handleExitRoom = async () => {
@@ -340,30 +357,7 @@ export default function Sidebar({
         <>
             {isOpen && <div className="sidebar-overlay open" onClick={onClose} />}
 
-            {/* Floating toggle button when sidebar is collapsed */}
-            {isCollapsed && !isOpen && (
-                <button
-                    className="sidebar-float-toggle collapsed"
-                    onClick={onToggle}
-                    title="Open Sidebar"
-                >
-                    <i className="fa-solid fa-angles-left" />
-                </button>
-            )}
-
             <aside className={sidebarClassName}>
-                {/* Collapse / Close button inside sidebar */}
-                <div className="sidebar-toggle-header">
-                    <button
-                        className="sidebar-collapse-btn"
-                        onClick={onToggle}
-                        title={isCollapsed ? "Expand Sidebar" : "Collapse Sidebar"}
-                    >
-                        <i className={"fa-solid fa-angles-right"} />
-                        <span>Hide</span>
-                    </button>
-                </div>
-
                 {/* Room Info */}
                 <div className="sidebar-header">
                     <div className="sidebar-title">Room Info</div>
@@ -495,13 +489,23 @@ export default function Sidebar({
                                     <button
                                         className="request-btn reject member-remove-btn"
                                         title="Remove member from room"
-                                        onClick={() => setRemoveDialogMember(member)}
+                                        onClick={() => {
+                                            setMemberActionError("");
+                                            setRemoveDialogMember(member);
+                                        }}
                                     >
                                         <i className="fa-solid fa-user-minus" />
                                     </button>
                                 )}
                             </div>
                         ))}
+                    </div>
+                )}
+
+                {isAdmin && memberActionError && (
+                    <div className="sidebar-action-error" role="alert" aria-live="polite">
+                        <i className="fa-solid fa-triangle-exclamation" />
+                        <span>{memberActionError}</span>
                     </div>
                 )}
 

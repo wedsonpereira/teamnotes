@@ -42,6 +42,7 @@ export async function DELETE(request, { params }) {
             where: {
                 roomId,
                 userId: { not: room.adminId },
+                status: { in: ["APPROVED", "PENDING"] },
             },
         });
 
