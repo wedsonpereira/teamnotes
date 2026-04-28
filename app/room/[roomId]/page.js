@@ -51,7 +51,7 @@ export default function RoomPage() {
     const [saveStatus, setSaveStatus] = useState(false);
     const [roomName, setRoomName] = useState("Loading...");
     const [sidebarOpen, setSidebarOpen] = useState(false);
-    const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+    const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
     const [user, setUser] = useState(null);
     const [accessDenied, setAccessDenied] = useState(false);
     const [pendingApproval, setPendingApproval] = useState(false);
@@ -142,9 +142,6 @@ export default function RoomPage() {
                                     : saved.floatingPlacement
                     );
                 }
-                if (typeof saved.sidebarCollapsed === "boolean") {
-                    setSidebarCollapsed(saved.sidebarCollapsed);
-                }
             }
         } catch (err) {
             console.warn("Failed to parse saved room UI settings:", err);
@@ -166,7 +163,6 @@ export default function RoomPage() {
                 accentSecondary,
                 uiFontFamily,
                 floatingPlacement,
-                sidebarCollapsed,
             })
         );
     }, [
@@ -178,7 +174,6 @@ export default function RoomPage() {
         accentSecondary,
         uiFontFamily,
         floatingPlacement,
-        sidebarCollapsed,
     ]);
 
     // Apply theme + custom visual tokens to document root.
@@ -822,6 +817,9 @@ export default function RoomPage() {
                     isFloatingWindow={isFloatingWindow}
                     isEmbeddedFloating={isEmbeddedFloating}
                     onToggleFloatingWindow={handleToggleFloatingWindow}
+                    sidebarCollapsed={sidebarCollapsed}
+                    sidebarOpen={sidebarOpen}
+                    onToggleSidebar={handleSidebarToggle}
                 />
             )}
 
@@ -829,6 +827,7 @@ export default function RoomPage() {
                 <PageTabs
                     roomId={roomId}
                     userId={user.userId}
+                    roomKey={user.roomKey}
                     socket={socket}
                     activePage={activePage}
                     onPageChange={handlePageChange}
