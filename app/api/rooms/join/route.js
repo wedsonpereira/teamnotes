@@ -3,6 +3,12 @@ import bcrypt from "bcryptjs";
 import { NextResponse } from "next/server";
 import { pickMemberColor } from "@/lib/colors";
 import { createRoomSession, setRoomSessionCookie } from "@/lib/session";
+import { createRateLimiter, getClientIp, rateLimitResponse } from "@/lib/rateLimit";
+import { logError } from "@/lib/logger";
+
+// Rate limiters — stricter for this brute-force-sensitive endpoint.
+const ipLimiter = createRateLimiter({ windowMs: 60_000, maxRequests: 5 });
+const roomLimiter = createRateLimiter({ windowMs: 60_000, maxRequests: 10 });
 
 function normalizeEmail(value) {
     return String(value || "").trim().toLowerCase();
@@ -52,11 +58,31 @@ function approvedResponse({ room, user, status, color, message }) {
 
 export async function POST(request) {
     try {
+        const ip = getClientIp(request);
+        const ipCheck = ipLimiter.check(`join:${ip}`);
+        if (!ipCheck.allowed) return rateLimitResponse(ipCheck.retryAfterMs);
+
         const { firstName, lastName, email, roomCode, roomKey } = await request.json();
+
+        // Also rate-limit per roomCode to prevent targeted brute-force.
+        if (roomCode) {
+            const roomCheck = roomLimiter.check(`join:room:${roomCode}`);
+            if (!roomCheck.allowed) return rateLimitResponse(roomCheck.retryAfterMs);
+        }
 
         if (!email || !roomCode || !roomKey) {
             return NextResponse.json(
                 { error: "Email, Room ID, and Room Key are required." },
+                { status: 400 }
+            );
+        }
+
+        // Validate email format.
+        const normalizedEmail = String(email || "").trim().toLowerCase();
+        const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+        if (!EMAIL_REGEX.test(normalizedEmail)) {
+            return NextResponse.json(
+                { error: "Please enter a valid email address." },
                 { status: 400 }
             );
         }
@@ -83,7 +109,6 @@ export async function POST(request) {
             );
         }
 
-        const normalizedEmail = normalizeEmail(email);
         const invite = await prisma.roomInvite.findUnique({
             where: {
                 roomId_email: {
@@ -271,7 +296,7 @@ export async function POST(request) {
             message: "Join request sent. Waiting for admin approval.",
         });
     } catch (error) {
-        console.error("Join room error:", error);
+        logError("Join room", error);
         return NextResponse.json(
             { error: "Failed to join room. Please try again." },
             { status: 500 }

@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
 import { readRoomSessionFromRequest } from "@/lib/session";
+import { logError } from "@/lib/logger";
 
 function parseCompressedContent(content) {
     if (typeof content === "string") {
@@ -97,7 +98,7 @@ export async function POST(request, { params }) {
 
         return NextResponse.json({ message: "Content saved successfully." });
     } catch (error) {
-        console.error("Save content error:", error);
+        logError("Save/Load content", error);
         return NextResponse.json(
             { error: "Failed to save content." },
             { status: 500 }
@@ -157,7 +158,7 @@ export async function GET(request, { params }) {
         const base64 = Buffer.from(compressedContent).toString("base64");
         return NextResponse.json({ compressedContent: base64 });
     } catch (error) {
-        console.error("Load content error:", error);
+        logError("Save/Load content", error);
         return NextResponse.json(
             { error: "Failed to load content." },
             { status: 500 }

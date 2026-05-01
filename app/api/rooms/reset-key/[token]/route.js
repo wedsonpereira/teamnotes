@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import bcrypt from "bcryptjs";
 import { NextResponse } from "next/server";
+import { logError } from "@/lib/logger";
 
 // GET — validate token and return room info
 export async function GET(request, { params }) {
@@ -29,7 +30,7 @@ export async function GET(request, { params }) {
             adminName: `${room.admin.firstName} ${room.admin.lastName}`,
         });
     } catch (error) {
-        console.error("Token validation error:", error);
+        logError("Token validation", error);
         return NextResponse.json(
             { error: "Failed to validate token." },
             { status: 500 }
@@ -82,7 +83,7 @@ export async function POST(request, { params }) {
             message: "Room Key has been reset successfully!",
         });
     } catch (error) {
-        console.error("Reset key error:", error);
+        logError("Reset key", error);
         return NextResponse.json(
             { error: "Failed to reset key. Please try again." },
             { status: 500 }

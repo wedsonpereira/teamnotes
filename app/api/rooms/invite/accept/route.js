@@ -6,6 +6,7 @@ import {
     createRoomSession,
     setRoomSessionCookie,
 } from "@/lib/session";
+import { logError } from "@/lib/logger";
 
 function normalizeEmail(value) {
     return String(value || "").trim().toLowerCase();
@@ -168,7 +169,7 @@ export async function POST(request) {
         setRoomSessionCookie(response, session.token);
         return response;
     } catch (error) {
-        console.error("Accept invite error:", error);
+        logError("Accept invite", error);
         return NextResponse.json(
             { error: "Failed to accept invite." },
             { status: 500 }

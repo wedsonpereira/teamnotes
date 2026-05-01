@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { Buffer } from "node:buffer";
+import { logError } from "@/lib/logger";
 
 const DEFAULT_AMOUNT = 5;
 const DEFAULT_CURRENCY = "USD";
@@ -114,7 +115,7 @@ export async function POST(request) {
 
         return NextResponse.json({ url: approveUrl, environment });
     } catch (error) {
-        console.error("PayPal donation checkout error:", error);
+        logError("PayPal donation", error);
         return NextResponse.json(
             { error: error.message || "Failed to create PayPal order." },
             { status: 500 }

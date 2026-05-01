@@ -1,9 +1,17 @@
 import { prisma } from "@/lib/prisma";
 import { sendForgotRoomIdEmail } from "@/lib/email";
 import { NextResponse } from "next/server";
+import { createRateLimiter, getClientIp, rateLimitResponse } from "@/lib/rateLimit";
+import { logError } from "@/lib/logger";
+
+const ipLimiter = createRateLimiter({ windowMs: 60_000, maxRequests: 3 });
 
 export async function POST(request) {
     try {
+        const ip = getClientIp(request);
+        const ipCheck = ipLimiter.check(`forgot-roomid:${ip}`);
+        if (!ipCheck.allowed) return rateLimitResponse(ipCheck.retryAfterMs);
+
         const { email } = await request.json();
         const normalizedEmail = String(email || "").trim().toLowerCase();
 
@@ -79,7 +87,7 @@ export async function POST(request) {
                 "If an account exists with that email, we've sent the Room IDs to your inbox.",
         });
     } catch (error) {
-        console.error("Forgot room ID error:", error);
+        logError("Forgot room ID", error);
         return NextResponse.json(
             { error: "Failed to process request. Please try again." },
             { status: 500 }

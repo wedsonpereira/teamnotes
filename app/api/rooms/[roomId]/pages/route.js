@@ -2,6 +2,7 @@ import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
 import { readRoomSessionFromRequest } from "@/lib/session";
 import { Prisma } from "@prisma/client";
+import { logError } from "@/lib/logger";
 
 const MAX_PAGE_CREATE_RETRIES = 5;
 
@@ -85,7 +86,7 @@ export async function GET(request, { params }) {
 
         return NextResponse.json({ pages });
     } catch (error) {
-        console.error("List pages error:", error);
+        logError("List pages", error);
         return NextResponse.json(
             { error: "Failed to list pages." },
             { status: 500 }
@@ -183,7 +184,7 @@ export async function PUT(request, { params }) {
 
         return NextResponse.json({ pages });
     } catch (error) {
-        console.error("Reorder pages error:", error);
+        logError("Reorder pages", error);
         return NextResponse.json(
             { error: "Failed to reorder pages." },
             { status: 500 }
@@ -270,7 +271,7 @@ export async function POST(request, { params }) {
             },
         });
     } catch (error) {
-        console.error("Create page error:", error);
+        logError("Create page", error);
         return NextResponse.json(
             { error: "Failed to create page." },
             { status: 500 }

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { logError } from "@/lib/logger";
 
 const DEFAULT_AMOUNT_CENTS = 500;
 const DEFAULT_CURRENCY = "usd";
@@ -66,7 +67,7 @@ export async function POST(request) {
 
         return NextResponse.json({ url: data.url });
     } catch (error) {
-        console.error("Stripe donation checkout error:", error);
+        logError("Stripe donation", error);
         return NextResponse.json(
             { error: "Failed to create Stripe checkout session." },
             { status: 500 }

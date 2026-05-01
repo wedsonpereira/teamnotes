@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { logError } from "@/lib/logger";
 
 const DEFAULT_AMOUNT = 100;
 const DEFAULT_CURRENCY = "INR";
@@ -87,7 +88,7 @@ export async function POST(request) {
             environment,
         });
     } catch (error) {
-        console.error("Cashfree donation checkout error:", error);
+        logError("Cashfree donation", error);
         return NextResponse.json(
             { error: "Failed to create Cashfree order." },
             { status: 500 }

@@ -1,12 +1,12 @@
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
 import { colorFromName, pickMemberColor } from "@/lib/colors";
-import bcrypt from "bcryptjs";
 import {
     readRoomSessionFromRequest,
     createRoomInviteToken,
 } from "@/lib/session";
 import { sendRoomInviteEmail } from "@/lib/email";
+import { logError } from "@/lib/logger";
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -40,18 +40,15 @@ export async function GET(request, { params }) {
     try {
         const { roomId } = await params;
         const session = readRoomSessionFromRequest(request, roomId);
-        const { searchParams } = new URL(request.url);
-        const fallbackUserId = searchParams.get("userId");
-        const fallbackRoomKey =
-            request.headers.get("x-room-key") || searchParams.get("roomKey");
-        const userId = session?.userId || fallbackUserId;
 
-        if (!userId) {
+        if (!session?.userId) {
             return NextResponse.json(
                 { error: "Session expired. Please re-enter the room." },
                 { status: 401 }
             );
         }
+
+        const userId = session.userId;
 
         const room = await prisma.room.findUnique({
             where: { id: roomId },
@@ -68,61 +65,6 @@ export async function GET(request, { params }) {
 
         if (!room) {
             return NextResponse.json({ error: "Room not found." }, { status: 404 });
-        }
-
-        if (!session) {
-            if (!fallbackRoomKey) {
-                return NextResponse.json(
-                    { error: "Session expired. Please re-enter the room." },
-                    { status: 401 }
-                );
-            }
-
-            const keyValid = await bcrypt.compare(
-                String(fallbackRoomKey),
-                room.roomKeyHash
-            );
-            if (!keyValid) {
-                return NextResponse.json(
-                    { error: "Invalid room credentials." },
-                    { status: 403 }
-                );
-            }
-
-            const pending = room.members.find(
-                (m) => m.userId === userId && m.status === "PENDING"
-            );
-            if (pending) {
-                return NextResponse.json({
-                    status: "PENDING",
-                    message: "Your join request is pending admin approval.",
-                });
-            }
-
-            const rejected = room.members.find(
-                (m) => m.userId === userId && m.status === "REJECTED"
-            );
-            if (rejected) {
-                return NextResponse.json(
-                    { error: "Your join request was rejected by the admin." },
-                    { status: 403 }
-                );
-            }
-
-            const approved = room.members.find(
-                (m) => m.userId === userId && m.status === "APPROVED"
-            );
-            if (approved) {
-                return NextResponse.json({
-                    status: "APPROVED",
-                    message: "Membership approved.",
-                });
-            }
-
-            return NextResponse.json(
-                { error: "Session expired. Please re-enter the room." },
-                { status: 401 }
-            );
         }
 
         const isAdmin = room.adminId === userId;
@@ -191,7 +133,7 @@ export async function GET(request, { params }) {
                 : "Unknown",
         });
     } catch (error) {
-        console.error("Get members error:", error);
+        logError("Get members", error);
         return NextResponse.json(
             { error: "Failed to load members." },
             { status: 500 }
@@ -362,7 +304,7 @@ export async function POST(request, { params }) {
                 inviteLink,
             });
         } catch (mailError) {
-            console.error("Invite email send error:", mailError);
+            logError("Invite email send", mailError);
             return NextResponse.json(
                 {
                     error: "Invite saved, but failed to send email. Please verify SMTP settings and try again.",
@@ -397,7 +339,7 @@ export async function POST(request, { params }) {
             emailSent: true,
         });
     } catch (error) {
-        console.error("Invite member error:", error);
+        logError("Invite member", error);
         return NextResponse.json(
             { error: "Failed to invite teammate." },
             { status: 500 }
@@ -454,7 +396,7 @@ export async function DELETE(request, { params }) {
 
         return response;
     } catch (error) {
-        console.error("Exit room error:", error);
+        logError("Exit room", error);
         return NextResponse.json(
             { error: "Failed to exit room." },
             { status: 500 }
@@ -582,7 +524,7 @@ export async function PATCH(request, { params }) {
             },
         });
     } catch (error) {
-        console.error("Update member error:", error);
+        logError("Update member", error);
         return NextResponse.json(
             { error: "Failed to update member status." },
             { status: 500 }

@@ -4,6 +4,7 @@ import {
     readRoomSessionFromRequest,
     clearRoomSessionCookie,
 } from "@/lib/session";
+import { logError } from "@/lib/logger";
 
 // DELETE /api/rooms/[roomId] — Admin-only room deletion.
 // Rule: all non-admin users must be removed first.
@@ -68,7 +69,7 @@ export async function DELETE(request, { params }) {
         clearRoomSessionCookie(response);
         return response;
     } catch (error) {
-        console.error("Delete room error:", error);
+        logError("Delete room", error);
         return NextResponse.json(
             { error: "Failed to delete room." },
             { status: 500 }

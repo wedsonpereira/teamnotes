@@ -1,10 +1,18 @@
 import { prisma } from "@/lib/prisma";
 import { sendResetKeyEmail } from "@/lib/email";
+import { createRateLimiter, getClientIp, rateLimitResponse } from "@/lib/rateLimit";
+import { logError } from "@/lib/logger";
 import crypto from "crypto";
 import { NextResponse } from "next/server";
 
+const ipLimiter = createRateLimiter({ windowMs: 60_000, maxRequests: 3 });
+
 export async function POST(request) {
     try {
+        const ip = getClientIp(request);
+        const ipCheck = ipLimiter.check(`forgot-key:${ip}`);
+        if (!ipCheck.allowed) return rateLimitResponse(ipCheck.retryAfterMs);
+
         const { email, roomCode } = await request.json();
         const normalizedEmail = String(email || "").trim().toLowerCase();
 
@@ -74,7 +82,7 @@ export async function POST(request) {
 
         return NextResponse.json(genericResponse);
     } catch (error) {
-        console.error("Forgot key error:", error);
+        logError("Forgot key", error);
         return NextResponse.json(
             { error: "Failed to send reset email. Please try again." },
             { status: 500 }

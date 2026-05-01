@@ -625,6 +625,19 @@ app.prepare().then(() => {
                 "Permissions-Policy",
                 "camera=(), microphone=(), geolocation=()"
             );
+            // Content Security Policy — restrict script/style/connect sources.
+            res.setHeader(
+                "Content-Security-Policy",
+                [
+                    "default-src 'self'",
+                    "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
+                    "style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://fonts.googleapis.com",
+                    "font-src 'self' https://cdnjs.cloudflare.com https://fonts.gstatic.com",
+                    "connect-src 'self' wss: ws:",
+                    "img-src 'self' data: blob:",
+                    "frame-ancestors 'self'",
+                ].join("; ")
+            );
             if (
                 !dev &&
                 String(req.headers["x-forwarded-proto"] || "").includes("https")
@@ -700,7 +713,7 @@ app.prepare().then(() => {
         },
         path: "/socket.io",
         // Allow larger collaborative updates (e.g., embedded base64 files).
-        maxHttpBufferSize: 5e7, // 50 MB
+        maxHttpBufferSize: 5e6, // 5 MB (reduced from 50 MB to prevent memory exhaustion)
     });
 
     io.use((socket, next) => {

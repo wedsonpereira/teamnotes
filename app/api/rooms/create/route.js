@@ -5,9 +5,13 @@ import { NextResponse } from "next/server";
 import { pickMemberColor } from "@/lib/colors";
 import { createRoomSession, setRoomSessionCookie } from "@/lib/session";
 import { Prisma } from "@prisma/client";
+import { createRateLimiter, getClientIp, rateLimitResponse } from "@/lib/rateLimit";
+import { logError } from "@/lib/logger";
+
+const ipLimiter = createRateLimiter({ windowMs: 60_000, maxRequests: 3 });
 
 const ROOM_CODE_REGEX = /^[A-Za-z0-9_-]{4,32}$/;
-const ROOM_KEY_MIN_LENGTH = 4;
+const ROOM_KEY_MIN_LENGTH = 8;
 const ROOM_KEY_MAX_LENGTH = 72;
 const MAX_ROOM_CODE_GENERATION_ATTEMPTS = 5;
 
@@ -29,6 +33,10 @@ function isRoomCodeConflict(error) {
 
 export async function POST(request) {
     try {
+        const ip = getClientIp(request);
+        const ipCheck = ipLimiter.check(`create:${ip}`);
+        if (!ipCheck.allowed) return rateLimitResponse(ipCheck.retryAfterMs);
+
         const {
             firstName,
             lastName,
@@ -45,6 +53,15 @@ export async function POST(request) {
         if (!normalizedFirstName || !normalizedLastName || !normalizedEmail) {
             return NextResponse.json(
                 { error: "First name, last name, and email are required." },
+                { status: 400 }
+            );
+        }
+
+        // Validate email format.
+        const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+        if (!EMAIL_REGEX.test(normalizedEmail)) {
+            return NextResponse.json(
+                { error: "Please enter a valid email address." },
                 { status: 400 }
             );
         }
@@ -71,10 +88,11 @@ export async function POST(request) {
             );
         }
 
-        // Upsert user
+        // Upsert user — do NOT overwrite name fields for existing users.
+        // This prevents identity spoofing via email impersonation.
         const user = await prisma.user.upsert({
             where: { email: normalizedEmail },
-            update: { firstName: normalizedFirstName, lastName: normalizedLastName },
+            update: {},
             create: {
                 firstName: normalizedFirstName,
                 lastName: normalizedLastName,
@@ -146,7 +164,7 @@ export async function POST(request) {
         setRoomSessionCookie(response, session.token);
         return response;
     } catch (error) {
-        console.error("Create room error:", error);
+        logError("Create room", error);
         return NextResponse.json(
             { error: "Failed to create room. Please try again." },
             { status: 500 }

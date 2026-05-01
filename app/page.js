@@ -294,12 +294,7 @@ export default function LandingPage() {
         const checkApprovalStatus = async () => {
             try {
                 const res = await fetch(
-                    `/api/rooms/${success.roomId}/members?userId=${success.userId}`,
-                    {
-                        headers: {
-                            "x-room-key": success.roomKey || "",
-                        },
-                    }
+                    `/api/rooms/${success.roomId}/membership-status?userId=${success.userId}`
                 );
                 const data = await res.json();
 

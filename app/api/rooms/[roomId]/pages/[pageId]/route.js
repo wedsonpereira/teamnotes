@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
 import { readRoomSessionFromRequest } from "@/lib/session";
+import { logError } from "@/lib/logger";
 
 // PATCH /api/rooms/[roomId]/pages/[pageId] — Rename a page
 export async function PATCH(request, { params }) {
@@ -56,7 +57,7 @@ export async function PATCH(request, { params }) {
             },
         });
     } catch (error) {
-        console.error("Rename page error:", error);
+        logError("Rename page", error);
         return NextResponse.json(
             { error: "Failed to rename page." },
             { status: 500 }
@@ -112,7 +113,7 @@ export async function DELETE(request, { params }) {
 
         return NextResponse.json({ message: "Page deleted." });
     } catch (error) {
-        console.error("Delete page error:", error);
+        logError("Delete page", error);
         return NextResponse.json(
             { error: "Failed to delete page." },
             { status: 500 }

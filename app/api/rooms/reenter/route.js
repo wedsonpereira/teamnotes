@@ -3,9 +3,16 @@ import bcrypt from "bcryptjs";
 import { NextResponse } from "next/server";
 import { colorFromName } from "@/lib/colors";
 import { createRoomSession, setRoomSessionCookie } from "@/lib/session";
+import { createRateLimiter, getClientIp, rateLimitResponse } from "@/lib/rateLimit";
+import { logError } from "@/lib/logger";
+
+const ipLimiter = createRateLimiter({ windowMs: 60_000, maxRequests: 5 });
 
 export async function POST(request) {
     try {
+        const ip = getClientIp(request);
+        const ipCheck = ipLimiter.check(`reenter:${ip}`);
+        if (!ipCheck.allowed) return rateLimitResponse(ipCheck.retryAfterMs);
         const { email, roomCode, roomKey } = await request.json();
         const normalizedEmail = String(email || "").trim().toLowerCase();
 
@@ -103,7 +110,7 @@ export async function POST(request) {
         setRoomSessionCookie(response, session.token);
         return response;
     } catch (error) {
-        console.error("Re-enter room error:", error);
+        logError("Re-enter room", error);
         return NextResponse.json(
             { error: "Failed to re-enter room. Please try again." },
             { status: 500 }

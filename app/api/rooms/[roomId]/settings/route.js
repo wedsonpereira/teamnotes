@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
 import { readRoomSessionFromRequest } from "@/lib/session";
+import { logError } from "@/lib/logger";
 
 // PATCH /api/rooms/[roomId]/settings — Update room settings
 export async function PATCH(request, { params }) {
@@ -37,7 +38,7 @@ export async function PATCH(request, { params }) {
             name: updatedRoom.name,
         });
     } catch (error) {
-        console.error("Update settings error:", error);
+        logError("Update settings", error);
         return NextResponse.json(
             { error: "Failed to update settings." },
             { status: 500 }
