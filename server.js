@@ -202,7 +202,7 @@ async function hasApprovedRoomAccess(roomId, userId) {
     }
 
     if (room.adminId === userId) {
-        return { allowed: true, isAdmin: true };
+        return { allowed: true, isAdmin: true, access: "EDIT" };
     }
 
     const membership = await prisma.roomMember.findFirst({
@@ -211,10 +211,14 @@ async function hasApprovedRoomAccess(roomId, userId) {
             userId,
             status: "APPROVED",
         },
-        select: { id: true },
+        select: { id: true, access: true },
     });
 
-    return { allowed: Boolean(membership), isAdmin: false };
+    return {
+        allowed: Boolean(membership),
+        isAdmin: false,
+        access: membership?.access || "EDIT",
+    };
 }
 
 async function canWatchRoomApproval(roomId, userId) {
@@ -775,6 +779,7 @@ app.prepare().then(() => {
                 socket.roomId = roomId;
                 socket.roomAuthorized = true;
                 socket.session.isAdmin = roomAccess.isAdmin;
+                socket.session.access = roomAccess.access || "EDIT";
                 socket.userData = safeUser;
                 socket.pageId = normalizedPageId;
 
@@ -917,6 +922,7 @@ app.prepare().then(() => {
         socket.on("yjs-update", ({ roomId, update, user, pageId }) => {
             if (!update || !roomId) return;
             if (!socketHasRoomAccess(socket, roomId)) return;
+            if (!socket.session?.isAdmin && socket.session?.access === "VIEW") return;
 
             const incomingPageId = normalizePageId(pageId);
             const activePageId = socket.pageId || null;
@@ -1006,6 +1012,30 @@ app.prepare().then(() => {
             if (!socket.session?.isAdmin) return;
             io.to(roomId).emit("members-refresh");
             io.to(getApprovalChannel(roomId)).emit("approval-refresh");
+        });
+
+        socket.on("member-access-changed", async ({ roomId, userId }) => {
+            if (!roomId || !userId) return;
+            if (!socketHasRoomAccess(socket, roomId)) return;
+            if (!socket.session?.isAdmin) return;
+
+            const membership = await prisma.roomMember.findFirst({
+                where: { roomId, userId, status: "APPROVED" },
+                select: { access: true },
+            });
+            const nextAccess = membership?.access || "EDIT";
+
+            io.to(roomId).emit("members-refresh");
+
+            const roomSocketIds = io.sockets.adapter.rooms.get(roomId);
+            if (!roomSocketIds) return;
+
+            for (const socketId of roomSocketIds) {
+                const roomSocket = io.sockets.sockets.get(socketId);
+                if (!roomSocket || roomSocket.userData?.userId !== userId) continue;
+                roomSocket.session.access = nextAccess;
+                roomSocket.emit("access-refresh", { roomId, access: nextAccess });
+            }
         });
 
         // Admin removed an approved member; revoke access in real time.

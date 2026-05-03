@@ -3,6 +3,24 @@ import { NextResponse } from "next/server";
 import { readRoomSessionFromRequest } from "@/lib/session";
 import { logError } from "@/lib/logger";
 
+async function getRoomAccess(roomId, userId) {
+    const room = await prisma.room.findUnique({
+        where: { id: roomId },
+        select: { adminId: true },
+    });
+    if (!room) return { allowed: false, canEdit: false };
+    if (room.adminId === userId) return { allowed: true, canEdit: true };
+
+    const member = await prisma.roomMember.findFirst({
+        where: { roomId, userId, status: "APPROVED" },
+        select: { access: true },
+    });
+    return {
+        allowed: Boolean(member),
+        canEdit: member?.access !== "VIEW",
+    };
+}
+
 // PATCH /api/rooms/[roomId]/pages/[pageId] — Rename a page
 export async function PATCH(request, { params }) {
     try {
@@ -23,13 +41,16 @@ export async function PATCH(request, { params }) {
             );
         }
 
-        const member = await prisma.roomMember.findFirst({
-            where: { roomId, userId: session.userId, status: "APPROVED" },
-        });
-
-        if (!member) {
+        const access = await getRoomAccess(roomId, session.userId);
+        if (!access.allowed) {
             return NextResponse.json(
                 { error: "Access denied." },
+                { status: 403 }
+            );
+        }
+        if (!access.canEdit) {
+            return NextResponse.json(
+                { error: "View-only members cannot rename pages." },
                 { status: 403 }
             );
         }
@@ -77,13 +98,16 @@ export async function DELETE(request, { params }) {
             );
         }
 
-        const member = await prisma.roomMember.findFirst({
-            where: { roomId, userId: session.userId, status: "APPROVED" },
-        });
-
-        if (!member) {
+        const access = await getRoomAccess(roomId, session.userId);
+        if (!access.allowed) {
             return NextResponse.json(
                 { error: "Access denied." },
+                { status: 403 }
+            );
+        }
+        if (!access.canEdit) {
+            return NextResponse.json(
+                { error: "View-only members cannot delete pages." },
                 { status: 403 }
             );
         }

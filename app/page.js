@@ -6,7 +6,7 @@ import Badge from "@/components/landing/Badge";
 import HeroTitle from "@/components/landing/HeroTitle";
 import ActionButtons from "@/components/landing/ActionButtons";
 import ThemeToggle from "@/components/landing/ThemeToggle";
-import { saveClientSession } from "@/lib/clientSession";
+import { saveClientSession, readClientSession } from "@/lib/clientSession";
 
 const PENDING_APPROVAL_POLL_MS = 5000;
 
@@ -29,6 +29,30 @@ export default function LandingPage() {
     const [theme, setTheme] = useState("light");
     const [acceptingInvite, setAcceptingInvite] = useState(false);
     const [inviteToken, setInviteToken] = useState("");
+    const [checkingSession, setCheckingSession] = useState(true);
+
+    // Auto-redirect if the user already has a valid session
+    useEffect(() => {
+        if (typeof window === "undefined") return;
+
+        // Don't auto-redirect if arriving via an invite link
+        const urlInvite = new URLSearchParams(window.location.search).get("invite");
+        if (urlInvite) {
+            setCheckingSession(false);
+            return;
+        }
+
+        const session = readClientSession();
+        // Validate roomId format to prevent open-redirect via tampered localStorage.
+        // Room IDs are Prisma-generated CUIDs/UUIDs — only allow safe characters.
+        const SAFE_ROOM_ID = /^[a-zA-Z0-9_-]+$/;
+        if (session && session.roomId && SAFE_ROOM_ID.test(session.roomId)) {
+            router.replace(`/room/${session.roomId}`);
+            return;
+        }
+
+        setCheckingSession(false);
+    }, [router]);
 
     // Form state
     const [firstName, setFirstName] = useState("");
@@ -466,6 +490,17 @@ export default function LandingPage() {
             setLoading(false);
         }
     };
+
+    if (checkingSession) {
+        return (
+            <>
+                <div className="landing-bg" />
+                <div className="landing-container" style={{ textAlign: "center" }}>
+                    <div className="spinner" style={{ width: 28, height: 28, margin: "0 auto 16px" }} />
+                </div>
+            </>
+        );
+    }
 
     if (inviteToken && acceptingInvite) {
         return (

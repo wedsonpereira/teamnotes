@@ -9,6 +9,7 @@ import { sendRoomInviteEmail } from "@/lib/email";
 import { logError } from "@/lib/logger";
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const MEMBER_ACCESS_VALUES = new Set(["VIEW", "EDIT"]);
 
 function normalizeEmail(value) {
     return String(value || "").trim().toLowerCase();
@@ -68,9 +69,10 @@ export async function GET(request, { params }) {
         }
 
         const isAdmin = room.adminId === userId;
-        const isMember = room.members.some(
+        const currentMembership = room.members.find(
             (m) => m.userId === userId && m.status === "APPROVED"
         );
+        const isMember = Boolean(currentMembership);
 
         if (!isMember && !isAdmin) {
             // Check if pending
@@ -95,6 +97,7 @@ export async function GET(request, { params }) {
                 lastName: m.user.lastName,
                 email: m.user.email,
                 isAdmin: m.userId === room.adminId,
+                access: m.userId === room.adminId ? "EDIT" : (m.access || "EDIT"),
                 joinedAt: m.joinedAt,
                 color: m.color || colorFromName(m.user.firstName + m.user.lastName),
             }));
@@ -119,6 +122,7 @@ export async function GET(request, { params }) {
             roomCode: room.roomCode,
             showMembers: room.showMembers,
             isAdmin,
+            access: isAdmin ? "EDIT" : (currentMembership?.access || "EDIT"),
             members: room.showMembers || isAdmin ? approvedMembers : [],
             pendingMembers,
             invitedEmails: isAdmin
@@ -415,7 +419,7 @@ export async function PATCH(request, { params }) {
                 { status: 401 }
             );
         }
-        const { memberId, memberUserId, action } = await request.json();
+        const { memberId, memberUserId, action, access } = await request.json();
 
         // Verify admin
         const room = await prisma.room.findUnique({ where: { id: roomId } });
@@ -423,8 +427,45 @@ export async function PATCH(request, { params }) {
             return NextResponse.json({ error: "Unauthorized." }, { status: 403 });
         }
 
-        if (!["APPROVED", "REJECTED", "REMOVED"].includes(action)) {
+        if (!["APPROVED", "REJECTED", "REMOVED", "ACCESS"].includes(action)) {
             return NextResponse.json({ error: "Invalid action." }, { status: 400 });
+        }
+
+        if (action === "ACCESS") {
+            if (!memberUserId || !MEMBER_ACCESS_VALUES.has(access)) {
+                return NextResponse.json(
+                    { error: "memberUserId and a valid access value are required." },
+                    { status: 400 }
+                );
+            }
+
+            if (memberUserId === room.adminId) {
+                return NextResponse.json(
+                    { error: "Room admin access cannot be changed." },
+                    { status: 400 }
+                );
+            }
+
+            const member = await prisma.roomMember.updateMany({
+                where: {
+                    roomId,
+                    userId: memberUserId,
+                    status: "APPROVED",
+                },
+                data: { access },
+            });
+
+            if (member.count === 0) {
+                return NextResponse.json(
+                    { error: "Approved member not found." },
+                    { status: 404 }
+                );
+            }
+
+            return NextResponse.json({
+                message: access === "VIEW" ? "Member set to view only." : "Member can edit.",
+                access,
+            });
         }
 
         // Admin removes an already approved member from the room.

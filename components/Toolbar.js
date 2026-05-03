@@ -60,7 +60,32 @@ const UI_FONT_OPTIONS = [
     { label: "Times New Roman", value: "'Times New Roman', serif" },
 ];
 
-const FONT_SIZES = ["12", "14", "16", "18", "20", "24", "28", "32"];
+const FONT_SIZES = [
+    "8",
+    "9",
+    "10",
+    "11",
+    "13",
+    "14",
+    "15",
+    "16",
+    "17",
+    "18",
+    "19",
+    "20",
+    "21",
+    "22",
+    "23",
+    "24",
+    "25",
+    "26",
+    "27",
+    "28",
+    "29",
+    "30",
+    "31",
+    "32",
+];
 const DEFAULT_TEXT_COLOR = "#f0f0f5";
 const COMPACT_TOOLBAR_MAX_WIDTH = 1180;
 const PARAGRAPH_LINE_SPACING_OPTIONS = [
@@ -194,7 +219,7 @@ function RichTooltipBody({ tip }) {
     );
 }
 
-function TipBtn({ tip, className, onClick, onMouseDown, onMouseEnter, children, style, showTooltip = true }) {
+function TipBtn({ tip, className, onClick, onMouseDown, onMouseEnter, children, style, showTooltip = true, enableTooltip = false }) {
     const describedTip = describeTool(tip);
     const tooltipAnchorRef = useRef(null);
     const [showPortalTooltip, setShowPortalTooltip] = useState(false);
@@ -215,7 +240,7 @@ function TipBtn({ tip, className, onClick, onMouseDown, onMouseEnter, children, 
                     onMouseDown?.(event);
                 }}
                 onMouseEnter={(event) => {
-                    if (showTooltip) setShowPortalTooltip(true);
+                    if (showTooltip && enableTooltip) setShowPortalTooltip(true);
                     onMouseEnter?.(event);
                 }}
                 onMouseLeave={() => setShowPortalTooltip(false)}
@@ -224,7 +249,7 @@ function TipBtn({ tip, className, onClick, onMouseDown, onMouseEnter, children, 
             >
                 {children}
             </button>
-            {showTooltip && (
+            {showTooltip && enableTooltip && (
                 <PortalTooltip
                     tip={tip}
                     anchorRef={tooltipAnchorRef}
@@ -235,7 +260,7 @@ function TipBtn({ tip, className, onClick, onMouseDown, onMouseEnter, children, 
     );
 }
 
-function RichTipWrap({ tip, children }) {
+function RichTipWrap({ tip, children, enableTooltip = false }) {
     const describedTip = describeTool(tip);
     const tooltipAnchorRef = useRef(null);
     const [showPortalTooltip, setShowPortalTooltip] = useState(false);
@@ -245,16 +270,18 @@ function RichTipWrap({ tip, children }) {
             ref={tooltipAnchorRef}
             className="toolbar-tooltip-wrap"
             aria-label={describedTip}
-            onMouseEnter={() => setShowPortalTooltip(true)}
+            onMouseEnter={() => { if (enableTooltip) setShowPortalTooltip(true); }}
             onMouseLeave={() => setShowPortalTooltip(false)}
             onPointerDown={() => setShowPortalTooltip(false)}
         >
             {children}
-            <PortalTooltip
-                tip={tip}
-                anchorRef={tooltipAnchorRef}
-                visible={showPortalTooltip}
-            />
+            {enableTooltip && (
+                <PortalTooltip
+                    tip={tip}
+                    anchorRef={tooltipAnchorRef}
+                    visible={showPortalTooltip}
+                />
+            )}
         </span>
     );
 }
@@ -319,6 +346,18 @@ function normalizeFontSize(value) {
     return parsed || "default";
 }
 
+function normalizeCustomFontSize(value) {
+    const parsed = Number.parseFloat(String(value || "").replace("px", "").trim());
+    if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 200) return null;
+    return String(Number(parsed.toFixed(2)));
+}
+
+function applyPlaceholderFontSize(editorInstance, fontSizeValue) {
+    const size = fontSizeValue === "default" ? "12" : normalizeCustomFontSize(fontSizeValue);
+    if (!size) return;
+    editorInstance?.view?.dom?.style?.setProperty("--teamnote-placeholder-font-size", `${size}px`);
+}
+
 function normalizeHexColor(value, fallback = DEFAULT_TEXT_COLOR) {
     if (typeof value !== "string") return fallback;
     const trimmed = value.trim();
@@ -377,10 +416,11 @@ export default function Toolbar({
     sidebarCollapsed = false,
     sidebarOpen = false,
     onToggleSidebar,
+    readOnly = false,
 }) {
     const [editor, setEditor] = useState(null);
     const [showAdvanced, setShowAdvanced] = useState(false);
-    const [advancedPosition, setAdvancedPosition] = useState({ top: 0, right: 0 });
+    const [advancedPosition, setAdvancedPosition] = useState({ top: 0, right: 0, maxHeight: 480 });
     const [showEmojiPicker, setShowEmojiPicker] = useState(false);
     const [emojiPosition, setEmojiPosition] = useState({ top: 0, left: 0 });
     const [activeFontFamily, setActiveFontFamily] = useState("default");
@@ -391,7 +431,7 @@ export default function Toolbar({
     const [paragraphNoSpaceAfter, setParagraphNoSpaceAfter] = useState(false);
     const [isCompactToolbar, setIsCompactToolbar] = useState(false);
     const [isMobileToolbar, setIsMobileToolbar] = useState(false);
-    const [isMobileToolsHidden, setIsMobileToolsHidden] = useState(false);
+    const [isMobileToolsHidden, setIsMobileToolsHidden] = useState(true);
     const [showCompactMenu, setShowCompactMenu] = useState(false);
     const [showFloatingPlacementPicker, setShowFloatingPlacementPicker] = useState(false);
     const [floatingPlacementPosition, setFloatingPlacementPosition] = useState({ top: 0, left: 0 });
@@ -416,12 +456,16 @@ export default function Toolbar({
     const emojiPortalRef = useRef(null);
     const tableRef = useRef(null);
     const tableBtnRef = useRef(null);
+    const typingLabel = typingUsers.length > 0
+        ? `${typingUsers[0]}${typingUsers.length > 1 ? ` +${typingUsers.length - 1} more` : ""} typing...`
+        : "Idle";
     const tablePortalRef = useRef(null);
     const floatingPlacementPortalRef = useRef(null);
     const imageInputRef = useRef(null);
     const fileInputRef = useRef(null);
     const savedSelectionRef = useRef(null);
     const floatingPlacementWrapRef = useRef(null);
+    const floatingCloseTimerRef = useRef(null);
 
     const saveEditorSelection = useCallback(() => {
         if (editor) {
@@ -544,6 +588,8 @@ export default function Toolbar({
     useEffect(() => {
         if (!isMobileToolbar) {
             setIsMobileToolsHidden(false);
+        } else {
+            setIsMobileToolsHidden(true);
         }
     }, [isMobileToolbar]);
 
@@ -756,26 +802,24 @@ export default function Toolbar({
 
         if (!showAdvanced) {
             const rect = anchorElement.getBoundingClientRect();
-            const dropdownWidth = 260;
-            const estimatedDropdownHeight = 520;
-            const viewportPadding = 12;
-            const triggerGap = 12;
-            const maxTop = Math.max(
+            const dropdownWidth = Math.min(300, window.innerWidth - 24);
+            const estimatedDropdownHeight = 500;
+            const viewportPadding = 16;
+            const triggerGap = 10;
+            const maxAvailableHeight = Math.max(220, rect.top - viewportPadding - triggerGap);
+            const actualHeight = Math.min(estimatedDropdownHeight, maxAvailableHeight);
+            const clampedTop = Math.max(
                 viewportPadding,
-                window.innerHeight - Math.min(estimatedDropdownHeight, window.innerHeight - viewportPadding * 2) - viewportPadding
+                rect.top - actualHeight - triggerGap
             );
-            const canOpenAbove = rect.top - estimatedDropdownHeight - triggerGap >= viewportPadding;
             setAdvancedPosition({
-                top: clampNumber(
-                    canOpenAbove ? rect.top - estimatedDropdownHeight - triggerGap : rect.bottom + triggerGap,
-                    viewportPadding,
-                    maxTop
-                ),
+                top: clampedTop,
                 right: "auto",
+                maxHeight: Math.max(220, rect.top - clampedTop - triggerGap),
                 left: clampNumber(
-                    rect.right - dropdownWidth,
-                    viewportPadding,
-                    Math.max(viewportPadding, window.innerWidth - dropdownWidth - viewportPadding)
+                    rect.left + rect.width / 2 - dropdownWidth / 2,
+                    12,
+                    Math.max(12, window.innerWidth - dropdownWidth - 12)
                 ),
             });
         }
@@ -787,7 +831,7 @@ export default function Toolbar({
 
         const rect = anchorElement.getBoundingClientRect();
         const viewportPadding = 12;
-        const triggerGap = 12;
+        const triggerGap = 4;
         const popoverRect = popoverElement?.getBoundingClientRect();
         const popoverWidth = popoverRect?.width || 188;
         const popoverHeight = popoverRect?.height || 220;
@@ -814,9 +858,31 @@ export default function Toolbar({
         const nextPosition = getFloatingPlacementPosition(anchorElement);
         if (!nextPosition) return;
 
+        if (floatingCloseTimerRef.current) {
+            clearTimeout(floatingCloseTimerRef.current);
+            floatingCloseTimerRef.current = null;
+        }
         setFloatingPlacementPosition(nextPosition);
         setShowFloatingPlacementPicker(true);
     };
+
+    const scheduleFloatingClose = useCallback(() => {
+        if (floatingCloseTimerRef.current) {
+            clearTimeout(floatingCloseTimerRef.current);
+        }
+        floatingCloseTimerRef.current = setTimeout(() => {
+            floatingCloseTimerRef.current = null;
+            setHoveredFloatingPlacement(null);
+            setShowFloatingPlacementPicker(false);
+        }, 150);
+    }, []);
+
+    const cancelFloatingClose = useCallback(() => {
+        if (floatingCloseTimerRef.current) {
+            clearTimeout(floatingCloseTimerRef.current);
+            floatingCloseTimerRef.current = null;
+        }
+    }, []);
 
     const updateFloatingPlacementPosition = useCallback(() => {
         const anchorElement = floatingPlacementWrapRef.current;
@@ -830,6 +896,15 @@ export default function Toolbar({
                 : nextPosition
         ));
     }, [getFloatingPlacementPosition]);
+
+    // Clean up floating close timer on unmount
+    useEffect(() => {
+        return () => {
+            if (floatingCloseTimerRef.current) {
+                clearTimeout(floatingCloseTimerRef.current);
+            }
+        };
+    }, []);
 
     useLayoutEffect(() => {
         if (!showFloatingPlacementPicker) return;
@@ -946,6 +1021,10 @@ export default function Toolbar({
 
     const applyFontSize = (fontSizeValue) => {
         if (!editor) return;
+        const normalizedFontSize = fontSizeValue === "default"
+            ? "default"
+            : normalizeCustomFontSize(fontSizeValue);
+        if (!normalizedFontSize) return;
 
         const chain = editor.chain().focus();
         const sel = savedSelectionRef.current;
@@ -953,14 +1032,30 @@ export default function Toolbar({
             chain.setTextSelection(sel);
         }
 
-        if (fontSizeValue === "default") {
+        if (normalizedFontSize === "default") {
             chain.unsetFontSize();
         } else {
-            chain.setFontSize(`${fontSizeValue}px`);
+            chain.setFontSize(`${normalizedFontSize}px`);
         }
         chain.run();
 
-        setActiveFontSize(fontSizeValue);
+        applyPlaceholderFontSize(editor, normalizedFontSize);
+        setActiveFontSize(normalizedFontSize);
+    };
+
+    const handleFontSizeSelectChange = (value) => {
+        if (value !== "custom") {
+            applyFontSize(value);
+            return;
+        }
+
+        const currentSize = activeFontSize === "default" ? "12" : activeFontSize;
+        const customSize = window.prompt("Enter font size in px", currentSize);
+        if (customSize === null) return;
+
+        const normalizedSize = normalizeCustomFontSize(customSize);
+        if (!normalizedSize) return;
+        applyFontSize(normalizedSize);
     };
 
     const applyTextColor = (textColorValue) => {
@@ -1258,6 +1353,7 @@ export default function Toolbar({
                 className={`editor-toolbar ${isMobileToolbar ? "editor-toolbar-mobile-tools" : ""} ${isMobileToolsHidden ? "mobile-tools-hidden" : ""}`}
                 ref={toolbarShellRef}
             >
+            {!readOnly && (
             <div
                 className={`toolbar-primary ${shouldUseCompactToolbar ? "toolbar-primary-compact" : ""}`}
             >
@@ -1296,21 +1392,34 @@ export default function Toolbar({
 	                    </RichTipWrap>
 
 	                    <RichTipWrap tip="Font Size">
+                            {(() => {
+                                const hasCustomActiveSize =
+                                    activeFontSize !== "default" &&
+                                    !FONT_SIZES.includes(activeFontSize);
+                                return (
 	                        <select
 	                            className="toolbar-select toolbar-select-size"
 	                            value={activeFontSize}
 	                            onMouseDown={saveEditorSelection}
 	                            onFocus={saveEditorSelection}
-	                            onChange={(e) => applyFontSize(e.target.value)}
+	                            onChange={(e) => handleFontSizeSelectChange(e.target.value)}
 	                            aria-label={describeTool("Font Size")}
 	                        >
-	                            <option value="default">Size</option>
+	                            <option value="default">12px</option>
+                                {hasCustomActiveSize && (
+                                    <option value={activeFontSize}>
+                                        {activeFontSize}px
+                                    </option>
+                                )}
 	                            {FONT_SIZES.map((size) => (
 	                                <option key={size} value={size}>
 	                                    {size}px
 	                                </option>
 	                            ))}
+                                <option value="custom">Custom...</option>
 	                        </select>
+                                );
+                            })()}
 	                    </RichTipWrap>
 	                </div>
 
@@ -1815,6 +1924,7 @@ export default function Toolbar({
                                 top: advancedPosition.top,
                                 right: advancedPosition.right,
                                 left: advancedPosition.left,
+                                maxHeight: advancedPosition.maxHeight,
                             }}
                         >
                             <div className="advanced-dropdown-title">
@@ -1938,8 +2048,10 @@ export default function Toolbar({
                         document.body
                     )}
             </div>
+            )}
 
-            <span className="toolbar-donate-wrap toolbar-donate-top">
+            {!readOnly && (
+            <span className={`toolbar-donate-wrap toolbar-donate-top ${!sidebarCollapsed ? "sidebar-open" : ""}`}>
                 <TipBtn
                     tip="Buy Me a Meal"
                     className="toolbar-donate-btn"
@@ -1952,32 +2064,33 @@ export default function Toolbar({
                     <span>Donate us</span>
                 </TipBtn>
             </span>
+            )}
 
             <div className="toolbar-room-info" ref={toolbarRoomInfoRef}>
                 <span className="room-name">{roomName || "Untitled Room"}</span>
 
-                <span className="save-status">
-                    <span className={`save-dot ${saveStatus === true ? "saving" : ""}`} />
-                    {saveStatus === true ? "Saving..." : saveStatus === "saved" ? "Saved" : "Ready"}
+                <span className={`save-status ${typingUsers.length === 0 && saveStatus !== true && saveStatus !== "saved" ? "compact" : ""}`}>
+                    <span className={`save-dot ${typingUsers.length > 0 ? "saving" : ""}`} />
+                    {saveStatus === true ? "Saving..." : saveStatus === "saved" ? "Saved" : typingLabel}
                 </span>
+
+                {readOnly && (
+                    <span className="connection-badge disconnected">
+                        <i className="fa-solid fa-eye" />
+                        View only
+                    </span>
+                )}
 
                 <span className={`connection-badge ${connected ? "connected" : "disconnected"}`}>
                     <span style={{ width: 6, height: 6, borderRadius: "50%", background: "currentColor" }} />
                     {connected ? "Live" : "Offline"}
                 </span>
-
-                {typingUsers.length > 0 && (
-                    <span className="typing-indicator">
-                        {typingUsers[0]}
-                        {typingUsers.length > 1 ? ` +${typingUsers.length - 1} more` : ""} typing...
-                    </span>
-                )}
             </div>
 
             </div>
 
             <nav className="bottom-navigation-panel" aria-label="Room actions">
-                {isMobileToolbar && (
+                {isMobileToolbar && !readOnly && (
                     <TipBtn
                         tip={isMobileToolsHidden ? "Show Tools" : "Hide Tools"}
                         className={`bottom-nav-btn bottom-nav-tools-btn ${!isMobileToolsHidden ? "active" : ""}`}
@@ -1995,14 +2108,17 @@ export default function Toolbar({
                     <i className="fa-solid fa-table-columns" />
                 </TipBtn>
 
-                <TipBtn
-                    tip={theme === "dark" ? "Light Mode" : "Dark Mode"}
-                    className="bottom-nav-btn theme-toggle-btn"
-                    onClick={onToggleTheme}
-                >
-                    <i className={theme === "dark" ? "fa-regular fa-sun" : "fa-regular fa-moon"} />
-                </TipBtn>
+                {!readOnly && (
+                    <TipBtn
+                        tip={theme === "dark" ? "Light Mode" : "Dark Mode"}
+                        className="bottom-nav-btn theme-toggle-btn"
+                        onClick={onToggleTheme}
+                    >
+                        <i className={theme === "dark" ? "fa-regular fa-sun" : "fa-regular fa-moon"} />
+                    </TipBtn>
+                )}
 
+                {!readOnly && (
                 <div className="advanced-dropdown-wrapper toolbar-settings-action" ref={dropdownRef}>
                     <span ref={advancedBtnRef} style={{ display: "inline-flex" }}>
                         <TipBtn
@@ -2017,7 +2133,9 @@ export default function Toolbar({
                         </TipBtn>
                     </span>
                 </div>
+                )}
 
+                {!readOnly && (
                 <div
                     className="floating-placement-wrap"
                     ref={floatingPlacementWrapRef}
@@ -2029,8 +2147,7 @@ export default function Toolbar({
                         ) {
                             return;
                         }
-                        setHoveredFloatingPlacement(null);
-                        setShowFloatingPlacementPicker(false);
+                        scheduleFloatingClose();
                     }}
                 >
                     <TipBtn
@@ -2050,8 +2167,9 @@ export default function Toolbar({
                         <i className={isFloatingWindow || isEmbeddedFloating ? "fa-solid fa-xmark" : "fa-regular fa-window-restore"} />
                     </TipBtn>
                 </div>
+                )}
 
-                {isMobileToolbar && (
+                {isMobileToolbar && !readOnly && (
                     <span className="toolbar-donate-wrap toolbar-donate-nav">
                         <TipBtn
                             tip="Buy Me a Meal"
@@ -2141,7 +2259,10 @@ export default function Toolbar({
                     role="dialog"
                     aria-label="Floating window placement"
                     style={{ top: floatingPlacementPosition.top, left: floatingPlacementPosition.left }}
-                    onMouseEnter={() => setShowFloatingPlacementPicker(true)}
+                    onMouseEnter={() => {
+                        cancelFloatingClose();
+                        setShowFloatingPlacementPicker(true);
+                    }}
                     onMouseLeave={(event) => {
                         if (
                             floatingPlacementWrapRef.current &&
@@ -2150,8 +2271,7 @@ export default function Toolbar({
                         ) {
                             return;
                         }
-                        setHoveredFloatingPlacement(null);
-                        setShowFloatingPlacementPicker(false);
+                        scheduleFloatingClose();
                     }}
                 >
                     <div className="floating-placement-title">Floating window position</div>

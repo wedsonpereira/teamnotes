@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { Buffer } from "node:buffer";
 import { logError } from "@/lib/logger";
+import { createRateLimiter, getClientIp, rateLimitResponse } from "@/lib/rateLimit";
 
 const DEFAULT_AMOUNT = 5;
 const DEFAULT_CURRENCY = "USD";
@@ -46,7 +47,13 @@ async function getPayPalAccessToken(baseUrl, clientId, clientSecret) {
     return data.access_token;
 }
 
+const ipLimiter = createRateLimiter({ windowMs: 60_000, maxRequests: 5 });
+
 export async function POST(request) {
+    const ip = getClientIp(request);
+    const ipCheck = ipLimiter.check(`donate-paypal:${ip}`);
+    if (!ipCheck.allowed) return rateLimitResponse(ipCheck.retryAfterMs);
+
     const clientId = process.env.PAYPAL_CLIENT_ID;
     const clientSecret = process.env.PAYPAL_CLIENT_SECRET;
 

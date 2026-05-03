@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
 import { logError } from "@/lib/logger";
+import { createRateLimiter, getClientIp, rateLimitResponse } from "@/lib/rateLimit";
 
 /**
  * GET /api/rooms/[roomId]/membership-status?userId=<userId>
@@ -15,8 +16,14 @@ import { logError } from "@/lib/logger";
  * returns the caller's own status for the given room/user pair, never
  * any other member's data.
  */
+const ipLimiter = createRateLimiter({ windowMs: 60_000, maxRequests: 10 });
+
 export async function GET(request, { params }) {
     try {
+        const ip = getClientIp(request);
+        const ipCheck = ipLimiter.check(`membership-status:${ip}`);
+        if (!ipCheck.allowed) return rateLimitResponse(ipCheck.retryAfterMs);
+
         const { roomId } = await params;
         const { searchParams } = new URL(request.url);
         const userId = searchParams.get("userId");

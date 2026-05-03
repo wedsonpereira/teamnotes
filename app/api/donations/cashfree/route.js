@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { logError } from "@/lib/logger";
+import { createRateLimiter, getClientIp, rateLimitResponse } from "@/lib/rateLimit";
 
 const DEFAULT_AMOUNT = 100;
 const DEFAULT_CURRENCY = "INR";
@@ -27,7 +28,13 @@ function getCashfreeEnvironment() {
     return process.env.CASHFREE_ENV === "production" ? "production" : "sandbox";
 }
 
+const ipLimiter = createRateLimiter({ windowMs: 60_000, maxRequests: 5 });
+
 export async function POST(request) {
+    const ip = getClientIp(request);
+    const ipCheck = ipLimiter.check(`donate-cashfree:${ip}`);
+    if (!ipCheck.allowed) return rateLimitResponse(ipCheck.retryAfterMs);
+
     const clientId = process.env.CASHFREE_CLIENT_ID;
     const clientSecret = process.env.CASHFREE_CLIENT_SECRET;
 

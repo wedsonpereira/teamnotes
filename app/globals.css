@@ -830,9 +830,9 @@ select {
   align-items: center;
   justify-content: space-between;
   flex-wrap: nowrap;
-  gap: 14px;
+  gap: 8px;
   min-width: 0;
-  padding: 12px 14px;
+  padding: 4px 8px;
   background: var(--toolbar-bg);
   border-bottom: 1px solid var(--toolbar-border);
   overflow: visible;
@@ -888,7 +888,7 @@ select {
 .toolbar-primary {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
   width: max-content;
   min-width: 0;
   max-width: 100%;
@@ -898,8 +898,8 @@ select {
   -ms-overflow-style: none;
   flex: 0 1 auto;
   flex-wrap: nowrap;
-  padding: 6px;
-  border-radius: 8px;
+  padding: 3px;
+  border-radius: 7px;
   background: var(--toolbar-surface);
 }
 
@@ -916,20 +916,20 @@ select {
 .toolbar-group {
   display: flex;
   align-items: center;
-  gap: 3px;
+  gap: 2px;
   flex: 0 0 auto;
   min-width: max-content;
-  min-height: 38px;
-  padding: 4px;
+  min-height: 28px;
+  padding: 2px;
   border: 1px solid var(--toolbar-border);
-  border-radius: 8px;
+  border-radius: 7px;
   background: var(--toolbar-group-bg);
 }
 
 .toolbar-group-font {
-  gap: 4px;
+  gap: 3px;
   flex: 0 0 auto;
-  min-width: 246px;
+  min-width: 214px;
 }
 
 .toolbar-group-font .toolbar-tooltip-wrap {
@@ -982,29 +982,29 @@ select {
 .toolbar-divider {
   width: 1px;
   align-self: stretch;
-  min-height: 28px;
+  min-height: 24px;
   background: var(--toolbar-border);
-  margin: 4px 0;
+  margin: 3px 0;
 }
 
 .toolbar-btn {
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
   border: 1px solid transparent;
-  border-radius: 10px;
+  border-radius: 8px;
   background: transparent;
   color: var(--toolbar-text);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 14px;
+  font-size: 12px;
   font-family: inherit;
   transition: background 0.14s ease, color 0.14s ease, box-shadow 0.14s ease, border-color 0.14s ease;
   cursor: pointer;
 }
 
 .toolbar-btn i {
-  font-size: 14px;
+  font-size: 12px;
   line-height: 1;
   pointer-events: none;
 }
@@ -1032,25 +1032,25 @@ select {
 }
 
 .toolbar-select {
-  min-width: 126px;
-  height: 32px;
-  border-radius: 10px;
+  min-width: 112px;
+  height: 28px;
+  border-radius: 8px;
   border: 1px solid var(--toolbar-border);
   background: var(--toolbar-control-bg);
   color: var(--toolbar-text-strong);
-  padding: 0 28px 0 10px;
-  font-size: 12px;
+  padding: 0 24px 0 8px;
+  font-size: 11px;
   font-weight: 500;
   font-family: inherit;
   cursor: pointer;
-  line-height: 32px;
+  line-height: 28px;
   text-overflow: ellipsis;
 }
 
 .toolbar-select option {
   background: var(--toolbar-control-bg);
   color: var(--toolbar-text-strong);
-  padding: 6px 8px;
+  padding: 4px 6px;
 }
 
 [data-theme="light"] .toolbar-select option {
@@ -1059,24 +1059,25 @@ select {
 }
 
 .toolbar-select-font {
-  width: 154px;
-  min-width: 154px;
-  max-width: 154px;
+  width: 132px;
+  min-width: 132px;
+  max-width: 132px;
 }
 
 .toolbar-select-size {
-  width: 82px;
-  min-width: 82px;
-  max-width: 82px;
-  padding-right: 22px;
+  width: 70px;
+  min-width: 70px;
+  max-width: 70px;
+  padding-right: 20px;
 }
 
 .toolbar-select-spacing {
-  min-width: 148px;
+  min-width: 128px;
 }
 
 .toolbar-select-advanced {
-  min-width: 146px;
+  width: 100%;
+  min-width: 0;
 }
 
 .toolbar-select:focus {
@@ -1091,10 +1092,10 @@ select {
 }
 
 .toolbar-color-input {
-  width: 30px;
-  height: 26px;
+  width: 26px;
+  height: 24px;
   border: 1px solid var(--toolbar-border-strong);
-  border-radius: 10px;
+  border-radius: 8px;
   padding: 0;
   background: var(--toolbar-control-bg);
   cursor: pointer;
@@ -1116,14 +1117,14 @@ select {
 }
 
 .toolbar-highlight-color {
-  width: 24px;
-  height: 24px;
+  width: 22px;
+  height: 22px;
   border-radius: 999px;
 }
 
 .toolbar-text-color {
-  width: 24px;
-  height: 24px;
+  width: 22px;
+  height: 22px;
   border-radius: 999px;
 }
 
@@ -1155,11 +1156,20 @@ select {
 }
 
 .toolbar-input-row {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(32px, auto);
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 6px 4px;
+  gap: 10px;
+  padding: 7px 4px;
+}
+
+.toolbar-input-row .toolbar-tooltip-wrap {
+  min-width: 0;
+  justify-self: end;
+}
+
+.toolbar-input-row .toolbar-select-advanced {
+  max-width: 158px;
 }
 
 .editor-context-menu {
@@ -1528,6 +1538,18 @@ select {
   flex: 0 0 auto;
 }
 
+.toolbar-donate-top {
+  position: fixed;
+  bottom: 12px;
+  right: 16px;
+  z-index: 91;
+  transition: right 0.22s ease;
+}
+
+.toolbar-donate-top.sidebar-open {
+  right: calc(var(--sidebar-width, 300px) + 16px);
+}
+
 .toolbar-donate-nav {
   display: none;
 }
@@ -1546,6 +1568,7 @@ select {
   background: var(--toolbar-bg);
   box-shadow: 0 10px 26px rgba(0, 0, 0, 0.22);
   transform: translateX(-50%);
+  height: 44px;
 }
 
 .bottom-navigation-panel .bottom-nav-btn,
@@ -1602,10 +1625,10 @@ select {
   gap: 7px;
   flex: 0 0 auto;
   width: auto;
-  height: 34px;
-  padding: 0 12px;
+  height: 44px;
+  padding: 0 14px;
   border: 1px solid rgba(220, 38, 38, 0.72);
-  border-radius: 7px;
+  border-radius: 10px;
   background: #dc2626;
   color: #fff;
   font-size: 13px;
@@ -1613,14 +1636,15 @@ select {
   font-family: inherit;
   cursor: pointer;
   transition: background 0.14s ease, border-color 0.14s ease, transform 0.14s ease;
-  box-shadow: none;
+  box-shadow: 0 4px 16px rgba(220, 38, 38, 0.25);
 }
 
 .toolbar-donate-btn:hover {
   background: #b91c1c;
   border-color: rgba(248, 113, 113, 0.82);
   color: #fff;
-  transform: none;
+  transform: translateY(-1px);
+  box-shadow: 0 6px 20px rgba(220, 38, 38, 0.35);
 }
 
 .toolbar-donate-btn i {
@@ -1870,6 +1894,12 @@ select {
   align-items: center;
   gap: 6px;
   white-space: nowrap;
+}
+
+.save-status.compact {
+  gap: 4px;
+  font-size: 10px;
+  max-width: 42px;
 }
 
 .save-dot {
@@ -2530,6 +2560,7 @@ select {
 .editor-content .tiptap .is-editor-empty:first-child::before {
   content: attr(data-placeholder);
   float: left;
+  font-size: var(--teamnote-placeholder-font-size, 12px);
   color: var(--text-muted);
   pointer-events: none;
   height: 0;
@@ -2782,6 +2813,23 @@ select {
   background: var(--text-muted);
 }
 
+.member-access-select {
+  min-width: 68px;
+  height: 28px;
+  border: 1px solid var(--border-color);
+  border-radius: 7px;
+  background: var(--bg-glass);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  outline: none;
+  cursor: pointer;
+}
+
+.member-access-select:focus {
+  border-color: var(--accent-primary);
+}
+
 /* ---- INVITE SECTION ---- */
 .invite-box {
   background: var(--bg-glass);
@@ -2964,8 +3012,8 @@ select {
 
 @media (max-width: 900px) {
   .editor-layout:not(.floating-window) {
-    --mobile-tools-width: 76px;
-    --mobile-topbar-height: 48px;
+    --mobile-tools-width: 68px;
+    --mobile-topbar-height: 42px;
     grid-template-rows: auto 1fr;
     padding-left: var(--mobile-tools-width);
     padding-top: var(--mobile-topbar-height);
@@ -2991,16 +3039,16 @@ select {
 
   .editor-toolbar {
     position: fixed;
-    inset: var(--mobile-topbar-height, 48px) auto 0 0;
+    inset: var(--mobile-topbar-height, 42px) auto 0 0;
     z-index: 58;
-    width: var(--mobile-tools-width, 76px);
-    height: calc(100vh - var(--mobile-topbar-height, 48px));
+    width: var(--mobile-tools-width, 68px);
+    height: calc(100vh - var(--mobile-topbar-height, 42px));
     flex-direction: column;
     flex-wrap: nowrap;
     justify-content: flex-start;
     align-items: center;
-    gap: 8px;
-    padding: 8px 6px;
+    gap: 6px;
+    padding: 6px 4px;
     border-right: 1px solid var(--toolbar-border);
     border-bottom: none;
     overflow-x: hidden;
@@ -3036,7 +3084,7 @@ select {
     flex-direction: column;
     align-items: stretch;
     flex-wrap: nowrap;
-    gap: 8px;
+    gap: 6px;
     padding: 0;
     background: transparent;
     overflow: visible;
@@ -3049,7 +3097,7 @@ select {
     right: 0;
     order: 3;
     width: auto;
-    min-height: var(--mobile-topbar-height, 48px);
+    min-height: var(--mobile-topbar-height, 42px);
     min-width: 0;
     flex: 0 0 auto;
     flex-direction: row;
@@ -3057,7 +3105,7 @@ select {
     align-items: center;
     justify-content: flex-start;
     gap: 6px;
-    padding: 8px 48px 8px 10px;
+    padding: 5px 48px 5px 9px;
     background: var(--toolbar-bg);
     border-bottom: 1px solid var(--toolbar-border);
     box-shadow: var(--toolbar-shadow);
@@ -3070,8 +3118,8 @@ select {
     min-height: 0;
     flex-direction: column;
     align-items: center;
-    gap: 4px;
-    padding: 4px;
+    gap: 3px;
+    padding: 3px;
   }
 
   .toolbar-group-font {
@@ -3085,7 +3133,7 @@ select {
   .toolbar-select {
     width: 100%;
     min-width: 0;
-    height: 30px;
+    height: 28px;
     padding: 0 18px 0 6px;
     font-size: 10px;
   }
@@ -3107,7 +3155,12 @@ select {
   }
 
   .typing-indicator {
-    display: none;
+    display: inline-flex;
+    font-size: 10px;
+    max-width: 90px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .room-name {
@@ -3138,8 +3191,9 @@ select {
   .connection-badge {
     flex: 0 0 auto;
     font-size: 10px;
-    padding: 3px 5px;
+    padding: 3px 6px;
     max-width: none;
+    display: inline-flex;
   }
 
   .connection-badge span {
@@ -3152,6 +3206,7 @@ select {
     max-width: calc(100vw - 20px);
     gap: 3px;
     padding: 5px;
+    height: auto;
   }
 
   .bottom-navigation-panel .bottom-nav-btn,
@@ -3163,6 +3218,7 @@ select {
   }
 
   .toolbar-donate-top {
+    position: static;
     display: none;
   }
 
@@ -3175,6 +3231,8 @@ select {
     background: transparent;
     border-color: transparent;
     color: #dc2626;
+    box-shadow: none;
+    height: 34px;
   }
 
   .bottom-navigation-panel .toolbar-donate-btn span {
@@ -3186,7 +3244,7 @@ select {
   .editor-toolbar {
     flex-direction: row;
     align-items: center;
-    gap: 8px;
+    gap: 6px;
   }
 
   .toolbar-primary {
@@ -3196,7 +3254,7 @@ select {
     flex-wrap: nowrap;
     overflow-x: auto;
     overflow-y: hidden;
-    padding-bottom: 6px;
+    padding-bottom: 4px;
   }
 
   .toolbar-divider {
@@ -3221,17 +3279,17 @@ select {
 
 @media (max-width: 640px) {
   .editor-toolbar {
-    padding: 8px;
+    padding: 3px;
   }
 
   .toolbar-divider {
-    margin: 0 4px;
+    margin: 0 3px;
   }
 
   .toolbar-btn,
   .theme-toggle-btn {
-    width: 32px;
-    height: 32px;
+    width: 30px;
+    height: 30px;
   }
 
   .toolbar-select {
@@ -3274,12 +3332,10 @@ select {
   }
 
   .connection-badge {
-    width: 20px;
-    height: 24px;
-    padding: 0;
-    justify-content: center;
-    font-size: 0;
-    gap: 0;
+    flex: 0 0 auto;
+    padding: 2px 5px;
+    font-size: 9px;
+    gap: 3px;
   }
 
   .editor-context-menu {
@@ -3582,9 +3638,10 @@ select {
 
 .advanced-dropdown {
   position: fixed;
-  width: 260px;
-  max-height: calc(100vh - 24px);
+  width: min(300px, calc(100vw - 24px));
+  max-height: calc(100vh - 104px);
   overflow-y: auto;
+  overflow-x: hidden;
   background: var(--bg-secondary);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
@@ -3592,6 +3649,7 @@ select {
   padding: 12px;
   z-index: 9999;
   animation: fadeIn 0.15s ease;
+  overscroll-behavior: contain;
 }
 
 .advanced-dropdown-title {
@@ -3619,6 +3677,9 @@ select {
 .advanced-label {
   font-size: 13px;
   color: var(--text-secondary);
+  min-width: 0;
+  overflow-wrap: anywhere;
+  line-height: 1.25;
 }
 
 /* ---- COLOR SWATCHES ---- */
@@ -3627,11 +3688,12 @@ select {
   gap: 6px;
   flex-wrap: wrap;
   padding: 6px 4px;
+  max-width: 100%;
 }
 
 .color-swatch {
-  width: 28px;
-  height: 28px;
+  width: 26px;
+  height: 26px;
   border-radius: 6px;
   border: 2px solid transparent;
   cursor: pointer;

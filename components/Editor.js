@@ -243,13 +243,29 @@ const IMAGE_DRAG_FALLBACK_KEY = "__teamnoteImageDragPos";
 const PAGE_TAB_DRAG_MIME = "application/x-teamnote-page-tab";
 const MENU_FONT_SIZES = [
     "default",
-    "12",
+    "8",
+    "9",
+    "10",
+    "11",
+    "13",
     "14",
+    "15",
     "16",
+    "17",
     "18",
+    "19",
     "20",
+    "21",
+    "22",
+    "23",
     "24",
+    "25",
+    "26",
+    "27",
     "28",
+    "29",
+    "30",
+    "31",
     "32",
 ];
 const MENU_LINE_SPACING_OPTIONS = [
@@ -1127,6 +1143,18 @@ function normalizeFontSize(value) {
     return parsed || "default";
 }
 
+function normalizeCustomFontSize(value) {
+    const parsed = Number.parseFloat(String(value || "").replace("px", "").trim());
+    if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 200) return null;
+    return String(Number(parsed.toFixed(2)));
+}
+
+function applyPlaceholderFontSize(editorInstance, fontSizeValue) {
+    const size = fontSizeValue === "default" ? "12" : normalizeCustomFontSize(fontSizeValue);
+    if (!size) return;
+    editorInstance?.view?.dom?.style?.setProperty("--teamnote-placeholder-font-size", `${size}px`);
+}
+
 // Maximum file size: 5 MB (stored as base64 in Yjs doc)
 const MAX_FILE_SIZE = 5 * 1024 * 1024;
 const DEFAULT_IMAGE_INSERT_WIDTH = 420;
@@ -1146,6 +1174,7 @@ export default function Editor({
     showLineNumbers = false,
     onChangeShowLineNumbers,
     externalYDoc,
+    readOnly = false,
 }) {
     const saveTimerRef = useRef(null);
     const ydocRef = useRef(null);
@@ -1157,6 +1186,7 @@ export default function Editor({
     const typingRafRef = useRef(null);
     const lastTypingEmitRef = useRef(0);
     const editorRef = useRef(null);
+    const readOnlyRef = useRef(readOnly);
     const savedSelectionRef = useRef(null);
     const contextMenuRef = useRef(null);
     const [showContextMenu, setShowContextMenu] = useState(false);
@@ -1171,6 +1201,10 @@ export default function Editor({
         DEFAULT_HIGHLIGHT_COLOR
     );
 
+    useEffect(() => {
+        readOnlyRef.current = readOnly;
+    }, [readOnly]);
+
     // Use an externally-cached Yjs document when provided so that
     // switching back to a previously-visited page is instant (the
     // document already contains the full editing state).
@@ -1182,6 +1216,7 @@ export default function Editor({
     // Insert files (images + non-image attachments) using TipTap commands
     // so block-node schema constraints are handled automatically.
     const insertFiles = useCallback(async (files, dropPos) => {
+        if (readOnlyRef.current) return;
         const ed = editorRef.current;
         if (!ed) return;
 
@@ -1242,7 +1277,7 @@ export default function Editor({
                 chain.insertContent(contentToInsert).run();
             }
         }
-    }, [userName, userColor]);
+    }, [userName, userColor, readOnly]);
 
     const authorTrackExt = useMemo(
         () =>
@@ -1288,8 +1323,10 @@ export default function Editor({
     const editor = useEditor({
         immediatelyRender: false,
         shouldRerenderOnTransaction: false,
+        editable: !readOnly,
         extensions: editorExtensions,
         onTransaction: ({ transaction }) => {
+            if (readOnlyRef.current) return;
             if (transaction.docChanged && isLocalEditorDocTransaction(transaction)) {
                 userInteractedRef.current = true;
             }
@@ -1300,9 +1337,11 @@ export default function Editor({
             },
             handleDOMEvents: {
                 mousedown: (view, event) =>
+                    readOnlyRef.current ? false :
                     maybeStartTablePointerAction(view, event),
             },
             handleKeyDown: (view, event) => {
+                if (readOnlyRef.current) return false;
                 if (event.key === "Backspace" || event.key === "Delete") {
                     if (deleteSelectedTable(view, event)) return true;
                 }
@@ -1431,6 +1470,7 @@ export default function Editor({
                 return true;
             },
             handlePaste: (view, event) => {
+                if (readOnlyRef.current) return false;
                 const insertPos = getInsertPosAfterSelectedMediaSelection(
                     view.state.selection
                 );
@@ -1476,6 +1516,7 @@ export default function Editor({
                 return true;
             },
             handleDrop: (view, event) => {
+                if (readOnlyRef.current) return false;
                 const dragTypes = Array.from(event?.dataTransfer?.types || []);
                 if (dragTypes.includes(PAGE_TAB_DRAG_MIME)) {
                     event.preventDefault();
@@ -1558,6 +1599,11 @@ export default function Editor({
             },
         },
     });
+
+    useEffect(() => {
+        if (!editor) return;
+        editor.setEditable(!readOnly);
+    }, [editor, readOnly]);
 
     const editorContrastColor = useMemo(
         () => getReadableColorForBackground(editorBg),
@@ -1670,17 +1716,33 @@ export default function Editor({
 
     const applyContextFontSize = useCallback(
         (fontSizeValue) => {
+            const normalizedFontSize = fontSizeValue === "default"
+                ? "default"
+                : normalizeCustomFontSize(fontSizeValue);
+            if (!normalizedFontSize) return;
+
             runFormatCommand((chain) => {
-                if (fontSizeValue === "default") {
+                if (normalizedFontSize === "default") {
                     chain.unsetFontSize();
                 } else {
-                    chain.setFontSize(`${fontSizeValue}px`);
+                    chain.setFontSize(`${normalizedFontSize}px`);
                 }
             });
-            setActiveFontSize(fontSizeValue);
+            applyPlaceholderFontSize(editor, normalizedFontSize);
+            setActiveFontSize(normalizedFontSize);
         },
-        [runFormatCommand]
+        [editor, runFormatCommand]
     );
+
+    const applyCustomContextFontSize = useCallback(() => {
+        const currentSize = activeFontSize === "default" ? "12" : activeFontSize;
+        const customSize = window.prompt("Enter font size in px", currentSize);
+        if (customSize === null) return;
+
+        const normalizedSize = normalizeCustomFontSize(customSize);
+        if (!normalizedSize) return;
+        applyContextFontSize(normalizedSize);
+    }, [activeFontSize, applyContextFontSize]);
 
     const applyContextLineSpacing = useCallback(
         (lineSpacingValue) => {
@@ -1835,6 +1897,7 @@ export default function Editor({
 
     // Auto-save: encode Yjs state -> compress -> encrypt -> POST
     const autoSave = useCallback(async () => {
+        if (readOnly) return;
         try {
             if (onContentChange) onContentChange(true);
 
@@ -1874,7 +1937,7 @@ export default function Editor({
             console.error("Auto-save failed:", err);
             if (onContentChange) onContentChange(false);
         }
-    }, [roomId, userId, roomKey, onContentChange, onSessionExpired, ydoc, pageId]);
+    }, [roomId, userId, roomKey, onContentChange, onSessionExpired, ydoc, pageId, readOnly]);
 
     useEffect(() => {
         const markActivity = () => {
@@ -1902,6 +1965,7 @@ export default function Editor({
         if (!socket || !roomId || !userId) return;
 
         const emitLocalUpdate = (update, origin) => {
+            if (readOnly) return;
             // Prevent rebroadcast loops for updates applied from socket events.
             if (origin === REMOTE_SOCKET_ORIGIN) return;
 
@@ -1959,10 +2023,10 @@ export default function Editor({
             socket.off("yjs-sync", applyRemoteUpdate);
             socket.off("connect", requestState);
         };
-    }, [socket, roomId, userId, ydoc, pageId]);
+    }, [socket, roomId, userId, ydoc, pageId, readOnly]);
 
     useEffect(() => {
-        if (!editor || !socket || !roomId || !userId) return;
+        if (!editor || !socket || !roomId || !userId || readOnly) return;
 
         const markTyping = () => {
             const now =
@@ -2003,7 +2067,7 @@ export default function Editor({
             if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
             socket.emit("typing-status", { roomId, userId, isTyping: false });
         };
-    }, [editor, socket, roomId, userId]);
+    }, [editor, socket, roomId, userId, readOnly]);
 
     // Load initial content from DB once.
     useEffect(() => {
@@ -2418,9 +2482,25 @@ export default function Editor({
                                             className={`editor-context-chip ${activeFontSize === size ? "active" : ""}`}
                                             onClick={() => applyContextFontSize(size)}
                                         >
-                                            {size === "default" ? "Default" : `${size}px`}
+                                            {size === "default" ? "12px" : `${size}px`}
                                         </button>
                                     ))}
+                                    {activeFontSize !== "default" && !MENU_FONT_SIZES.includes(activeFontSize) && (
+                                        <button
+                                            type="button"
+                                            className="editor-context-chip active"
+                                            onClick={() => applyContextFontSize(activeFontSize)}
+                                        >
+                                            {activeFontSize}px
+                                        </button>
+                                    )}
+                                    <button
+                                        type="button"
+                                        className="editor-context-chip"
+                                        onClick={applyCustomContextFontSize}
+                                    >
+                                        Custom...
+                                    </button>
                                 </div>
                             </div>
 

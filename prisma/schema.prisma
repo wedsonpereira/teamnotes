@@ -54,6 +54,7 @@ model RoomMember {
   userId   String
   roomId   String
   status   MemberStatus @default(PENDING)
+  access   MemberAccess @default(EDIT)
   color    String?
   user     User         @relation(fields: [userId], references: [id])
   room     Room         @relation(fields: [roomId], references: [id])
@@ -77,4 +78,9 @@ enum MemberStatus {
   PENDING
   APPROVED
   REJECTED
+}
+
+enum MemberAccess {
+  VIEW
+  EDIT
 }

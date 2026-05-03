@@ -36,6 +36,28 @@ function parseCompressedContent(content) {
     throw new Error("Unsupported content format.");
 }
 
+async function getRoomAccess(roomId, userId) {
+    const room = await prisma.room.findUnique({
+        where: { id: roomId },
+        select: { adminId: true },
+    });
+    if (!room) return { allowed: false, canEdit: false };
+    if (room.adminId === userId) return { allowed: true, canEdit: true };
+
+    const member = await prisma.roomMember.findFirst({
+        where: {
+            roomId,
+            userId,
+            status: "APPROVED",
+        },
+        select: { access: true },
+    });
+    return {
+        allowed: Boolean(member),
+        canEdit: member?.access !== "VIEW",
+    };
+}
+
 // POST /api/rooms/[roomId]/save — Save compressed content
 export async function POST(request, { params }) {
     try {
@@ -56,17 +78,15 @@ export async function POST(request, { params }) {
             );
         }
 
-        // Verify membership
-        const member = await prisma.roomMember.findFirst({
-            where: {
-                roomId,
-                userId: session.userId,
-                status: "APPROVED",
-            },
-        });
-
-        if (!member) {
+        const access = await getRoomAccess(roomId, session.userId);
+        if (!access.allowed) {
             return NextResponse.json({ error: "Access denied." }, { status: 403 });
+        }
+        if (!access.canEdit) {
+            return NextResponse.json(
+                { error: "View-only members cannot save changes." },
+                { status: 403 }
+            );
         }
 
         const encodedBytes = parseCompressedContent(compressedContent);
@@ -120,16 +140,8 @@ export async function GET(request, { params }) {
         const { searchParams } = new URL(request.url);
         const pageId = searchParams.get("pageId");
 
-        // Verify membership
-        const member = await prisma.roomMember.findFirst({
-            where: {
-                roomId,
-                userId: session.userId,
-                status: "APPROVED",
-            },
-        });
-
-        if (!member) {
+        const access = await getRoomAccess(roomId, session.userId);
+        if (!access.allowed) {
             return NextResponse.json({ error: "Access denied." }, { status: 403 });
         }
 

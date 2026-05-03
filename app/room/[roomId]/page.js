@@ -56,6 +56,7 @@ export default function RoomPage() {
     const [accessDenied, setAccessDenied] = useState(false);
     const [pendingApproval, setPendingApproval] = useState(false);
     const [accessChecked, setAccessChecked] = useState(false);
+    const [memberAccess, setMemberAccess] = useState("EDIT");
     const [theme, setTheme] = useState("dark");
     const [editorBg, setEditorBg] = useState(null);
     const [fontColor, setFontColor] = useState(null);
@@ -361,6 +362,7 @@ export default function RoomPage() {
                 }
 
                 setRoomName(data.roomName || "Untitled Room");
+                setMemberAccess(data.access || "EDIT");
                 setAccessChecked(true);
             } catch (err) {
                 console.error("Access check failed:", err);
@@ -404,6 +406,7 @@ export default function RoomPage() {
                 }
 
                 setRoomName(data.roomName || "Untitled Room");
+                setMemberAccess(data.access || "EDIT");
                 setAccessDenied(false);
                 setPendingApproval(false);
                 setAccessChecked(true);
@@ -468,6 +471,26 @@ export default function RoomPage() {
             });
         });
 
+        socketInstance.on("members-refresh", async () => {
+            try {
+                const res = await fetch(`/api/rooms/${roomId}/members`);
+                const data = await res.json();
+                if (res.status === 401) {
+                    handleSessionExpired();
+                    return;
+                }
+                if (!data.error && data.status !== "PENDING") {
+                    setMemberAccess(data.access || "EDIT");
+                }
+            } catch (err) {
+                console.error("Failed to refresh member access:", err);
+            }
+        });
+
+        socketInstance.on("access-refresh", ({ access }) => {
+            setMemberAccess(access || "EDIT");
+        });
+
         socketInstance.on("access-revoked", ({ roomId: revokedRoomId }) => {
             if (revokedRoomId && revokedRoomId !== roomId) return;
             clearClientSession();
@@ -482,9 +505,11 @@ export default function RoomPage() {
 
         return () => {
             setTypingUserIds([]);
+            socketInstance.off("members-refresh");
+            socketInstance.off("access-refresh");
             socketInstance.disconnect();
         };
-    }, [user, roomId, accessDenied, pendingApproval, accessChecked, resolvedUserColor, router]);
+    }, [user, roomId, accessDenied, pendingApproval, accessChecked, resolvedUserColor, router, handleSessionExpired]);
 
     // Keep socket page subscription aligned with the currently selected tab.
     // This also fixes the case where tabs load before socket connect.
@@ -787,6 +812,7 @@ export default function RoomPage() {
     }
 
     const currentUserName = `${user.firstName || ""} ${user.lastName || ""}`.trim();
+    const canEditRoom = user.isAdmin || memberAccess !== "VIEW";
 
     return (
         <div
@@ -820,6 +846,7 @@ export default function RoomPage() {
                     sidebarCollapsed={sidebarCollapsed}
                     sidebarOpen={sidebarOpen}
                     onToggleSidebar={handleSidebarToggle}
+                    readOnly={!canEditRoom}
                 />
             )}
 
@@ -831,6 +858,7 @@ export default function RoomPage() {
                     socket={socket}
                     activePage={activePage}
                     onPageChange={handlePageChange}
+                    canEdit={canEditRoom}
                 />
             )}
 
@@ -849,6 +877,7 @@ export default function RoomPage() {
                     editorBg={editorBg}
                     fontColor={fontColor}
                     externalYDoc={getOrCreateYDoc(activePage)}
+                    readOnly={!canEditRoom}
                 />
             )}
 

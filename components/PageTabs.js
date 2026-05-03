@@ -293,6 +293,7 @@ export default function PageTabs({
     socket,
     activePage,
     onPageChange,
+    canEdit = true,
 }) {
     const [pages, setPages] = useState([]);
     const [editingId, setEditingId] = useState(null);
@@ -440,6 +441,7 @@ export default function PageTabs({
     }, [orderedPages, activePage, editingId, menuOpenId]);
 
     const createPage = async () => {
+        if (!canEdit) return;
         try {
             const res = await fetch(`/api/rooms/${roomId}/pages`, {
                 method: "POST",
@@ -463,6 +465,10 @@ export default function PageTabs({
     };
 
     const renamePage = async (pageId) => {
+        if (!canEdit) {
+            setEditingId(null);
+            return;
+        }
         const trimmed = editTitle.trim();
 
         if (!trimmed) {
@@ -497,11 +503,13 @@ export default function PageTabs({
     };
 
     const requestDeletePage = (page) => {
+        if (!canEdit) return;
         setDeleteConfirmPage(page);
         setMenuOpenId(null);
     };
 
     const confirmDeletePage = async () => {
+        if (!canEdit) return;
         if (!deleteConfirmPage || pages.length <= 1) return;
         const pageId = deleteConfirmPage.id;
         setDeleteConfirmPage(null);
@@ -533,6 +541,7 @@ export default function PageTabs({
     };
 
     const closePages = async (pageIds, fallbackPageId) => {
+        if (!canEdit) return;
         const targetIds = [...new Set(pageIds)].filter((id) => id !== fallbackPageId);
         if (targetIds.length === 0) {
             setMenuOpenId(null);
@@ -612,6 +621,7 @@ export default function PageTabs({
     };
 
     const startRename = (page) => {
+        if (!canEdit) return;
         setEditingId(page.id);
         setEditTitle(page.title);
         setMenuOpenId(null);
@@ -633,12 +643,14 @@ export default function PageTabs({
     };
 
     const openTabMenu = (pageId, position) => {
+        if (!canEdit) return;
         setMoreMenuOpen(false);
         setMenuOpenId(pageId);
         setMenuPosition(position);
     };
 
     const persistPageOrder = useCallback(async (nextOrderedPages) => {
+        if (!canEdit) return;
         const nextPinnedIds = nextOrderedPages
             .filter((page) => pinnedIds.includes(page.id))
             .map((page) => page.id);
@@ -679,9 +691,13 @@ export default function PageTabs({
             console.error("Failed to reorder pages:", err);
             await fetchPages();
         }
-    }, [fetchPages, pinnedIds, roomId, socket]);
+    }, [canEdit, fetchPages, pinnedIds, roomId, socket]);
 
     const handleTabDragStart = (event, pageId) => {
+        if (!canEdit) {
+            event.preventDefault();
+            return;
+        }
         if (editingId === pageId) {
             event.preventDefault();
             return;
@@ -696,6 +712,7 @@ export default function PageTabs({
     };
 
     const handleTabDragOver = (event, pageId) => {
+        if (!canEdit) return;
         if (!draggingPageId || draggingPageId === pageId) return;
         event.preventDefault();
         event.dataTransfer.dropEffect = "move";
@@ -703,6 +720,7 @@ export default function PageTabs({
     };
 
     const handleTabDrop = (event, targetPageId) => {
+        if (!canEdit) return;
         event.preventDefault();
 
         const sourcePageId = draggingPageId || event.dataTransfer.getData(PAGE_TAB_DRAG_MIME);
@@ -719,6 +737,7 @@ export default function PageTabs({
     };
 
     const movePageByOffset = (pageId, offset) => {
+        if (!canEdit) return;
         const fromIndex = orderedPages.findIndex((page) => page.id === pageId);
         const toIndex = fromIndex + offset;
         if (fromIndex === -1 || toIndex < 0 || toIndex >= orderedPages.length) return;
@@ -837,7 +856,7 @@ export default function PageTabs({
                         <div
                             key={page.id}
                             className={`page-tab ${activePage === page.id ? "active" : ""} ${draggingPageId === page.id ? "dragging" : ""} ${dragOverPageId === page.id ? "drag-over" : ""}`}
-                            draggable={editingId !== page.id}
+                            draggable={canEdit && editingId !== page.id}
                             onClick={() => handleTabClick(page.id)}
                             onDragStart={(event) => handleTabDragStart(event, page.id)}
                             onDragOver={(event) => handleTabDragOver(event, page.id)}
@@ -846,6 +865,7 @@ export default function PageTabs({
                             onDragEnd={handleTabDragEnd}
                             onContextMenu={(event) => {
                                 event.preventDefault();
+                                if (!canEdit) return;
                                 openTabMenu(page.id, {
                                     top: event.clientY,
                                     left: event.clientX,
@@ -872,6 +892,7 @@ export default function PageTabs({
                                 <span className="page-tab-title">{page.title}</span>
                             )}
 
+                            {canEdit && (
                             <button
                                 className="page-tab-menu-btn"
                                 onClick={(event) => {
@@ -888,9 +909,10 @@ export default function PageTabs({
 	                                        });
 	                                    }
 	                                }}
-	                            >
+                            >
                                 <i className="fa-solid fa-ellipsis-vertical" />
                             </button>
+                            )}
                         </div>
                     );
                 })}
@@ -926,12 +948,14 @@ export default function PageTabs({
                 )}
             </div>
 
+            {canEdit && (
             <button className="page-tab-add" onClick={createPage} title="New Page">
                 <i className="fa-solid fa-plus" />
             </button>
+            )}
 
             {/* Dropdown menu rendered via portal so it's not clipped by overflow:hidden */}
-            {menuOpenId && menuPosition && typeof document !== "undefined" && (() => {
+            {canEdit && menuOpenId && menuPosition && typeof document !== "undefined" && (() => {
                 const menuPage = orderedPages.find((p) => p.id === menuOpenId);
                 if (!menuPage) return null;
                 const isPinned = pinnedIds.includes(menuPage.id);
@@ -1045,7 +1069,7 @@ export default function PageTabs({
             })()}
 
             {/* Delete Page Confirmation Dialog */}
-            {deleteConfirmPage && typeof document !== "undefined" && ReactDOM.createPortal(
+            {canEdit && deleteConfirmPage && typeof document !== "undefined" && ReactDOM.createPortal(
                 <div
                     className="modal-overlay"
                     ref={deleteDialogRef}

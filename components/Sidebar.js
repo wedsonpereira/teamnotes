@@ -125,6 +125,37 @@ export default function Sidebar({
         }
     };
 
+    const handleMemberAccessChange = async (member, access) => {
+        setMemberActionError("");
+
+        try {
+            const res = await fetch(`/api/rooms/${roomId}/members`, {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    action: "ACCESS",
+                    memberUserId: member.id,
+                    access,
+                }),
+            });
+
+            if (!res.ok) {
+                if (res.status === 401) {
+                    notifySessionExpired();
+                    return;
+                }
+                const err = await res.json().catch(() => ({}));
+                throw new Error(err.error || "Failed to update member access.");
+            }
+
+            await fetchMembers();
+            socket?.emit("member-access-changed", { roomId, userId: member.id });
+        } catch (err) {
+            console.error("Failed to update member access:", err);
+            setMemberActionError(err.message || "Failed to update member access.");
+        }
+    };
+
     const toggleShowMembers = async () => {
         const newVal = !showMembers;
         setShowMembers(newVal);
@@ -478,7 +509,11 @@ export default function Sidebar({
                                         {member.firstName} {member.lastName}
                                     </div>
                                     <div className="member-role">
-                                        {member.isAdmin ? "Admin" : "Member"}
+                                        {member.isAdmin
+                                            ? "Admin"
+                                            : member.access === "VIEW"
+                                                ? "View only"
+                                                : "Can edit"}
                                     </div>
                                 </div>
                                 <div
@@ -486,6 +521,18 @@ export default function Sidebar({
                                     title={onlineUsers.some((u) => u.userId === member.id) ? "Online" : "Offline"}
                                 />
                                 {isAdmin && !member.isAdmin && (
+                                    <>
+                                    <select
+                                        className="member-access-select"
+                                        value={member.access || "EDIT"}
+                                        title="Member access"
+                                        onChange={(event) =>
+                                            handleMemberAccessChange(member, event.target.value)
+                                        }
+                                    >
+                                        <option value="EDIT">Edit</option>
+                                        <option value="VIEW">View</option>
+                                    </select>
                                     <button
                                         className="request-btn reject member-remove-btn"
                                         title="Remove member from room"
@@ -496,6 +543,7 @@ export default function Sidebar({
                                     >
                                         <i className="fa-solid fa-user-minus" />
                                     </button>
+                                    </>
                                 )}
                             </div>
                         ))}

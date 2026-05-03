@@ -13,6 +13,24 @@ function isSortOrderConflict(error) {
     );
 }
 
+async function getRoomAccess(roomId, userId) {
+    const room = await prisma.room.findUnique({
+        where: { id: roomId },
+        select: { adminId: true },
+    });
+    if (!room) return { allowed: false, canEdit: false };
+    if (room.adminId === userId) return { allowed: true, canEdit: true };
+
+    const member = await prisma.roomMember.findFirst({
+        where: { roomId, userId, status: "APPROVED" },
+        select: { access: true },
+    });
+    return {
+        allowed: Boolean(member),
+        canEdit: member?.access !== "VIEW",
+    };
+}
+
 // GET /api/rooms/[roomId]/pages — List all pages for a room
 export async function GET(request, { params }) {
     try {
@@ -25,12 +43,8 @@ export async function GET(request, { params }) {
             );
         }
 
-        // Verify membership
-        const member = await prisma.roomMember.findFirst({
-            where: { roomId, userId: session.userId, status: "APPROVED" },
-        });
-
-        if (!member) {
+        const access = await getRoomAccess(roomId, session.userId);
+        if (!access.allowed) {
             return NextResponse.json(
                 { error: "Access denied." },
                 { status: 403 }
@@ -114,13 +128,16 @@ export async function PUT(request, { params }) {
             );
         }
 
-        const member = await prisma.roomMember.findFirst({
-            where: { roomId, userId: session.userId, status: "APPROVED" },
-        });
-
-        if (!member) {
+        const access = await getRoomAccess(roomId, session.userId);
+        if (!access.allowed) {
             return NextResponse.json(
                 { error: "Access denied." },
+                { status: 403 }
+            );
+        }
+        if (!access.canEdit) {
+            return NextResponse.json(
+                { error: "View-only members cannot reorder pages." },
                 { status: 403 }
             );
         }
@@ -205,14 +222,16 @@ export async function POST(request, { params }) {
         }
         const { title } = await request.json();
 
-        // Verify membership
-        const member = await prisma.roomMember.findFirst({
-            where: { roomId, userId: session.userId, status: "APPROVED" },
-        });
-
-        if (!member) {
+        const access = await getRoomAccess(roomId, session.userId);
+        if (!access.allowed) {
             return NextResponse.json(
                 { error: "Access denied." },
+                { status: 403 }
+            );
+        }
+        if (!access.canEdit) {
+            return NextResponse.json(
+                { error: "View-only members cannot create pages." },
                 { status: 403 }
             );
         }

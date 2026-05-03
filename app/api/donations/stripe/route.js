@@ -1,9 +1,11 @@
 import { NextResponse } from "next/server";
 import { logError } from "@/lib/logger";
+import { createRateLimiter, getClientIp, rateLimitResponse } from "@/lib/rateLimit";
 
 const DEFAULT_AMOUNT_CENTS = 500;
 const DEFAULT_CURRENCY = "usd";
 const DEFAULT_PRODUCT_NAME = "Buy Me a Meal";
+const ipLimiter = createRateLimiter({ windowMs: 60_000, maxRequests: 5 });
 
 function getRequestOrigin(request) {
     return (
@@ -20,6 +22,10 @@ function getPositiveInteger(value, fallback) {
 }
 
 export async function POST(request) {
+    const ip = getClientIp(request);
+    const ipCheck = ipLimiter.check(`donate-stripe:${ip}`);
+    if (!ipCheck.allowed) return rateLimitResponse(ipCheck.retryAfterMs);
+
     const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
 
     if (!stripeSecretKey) {
