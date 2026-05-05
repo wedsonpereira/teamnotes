@@ -11,6 +11,7 @@ import { logError } from "@/lib/logger";
 const ipLimiter = createRateLimiter({ windowMs: 60_000, maxRequests: 3 });
 
 const ROOM_CODE_REGEX = /^[A-Za-z0-9_-]{4,32}$/;
+const USERNAME_MAX_LENGTH = 48;
 const ROOM_KEY_MIN_LENGTH = 8;
 const ROOM_KEY_MAX_LENGTH = 72;
 const MAX_ROOM_CODE_GENERATION_ATTEMPTS = 5;
@@ -38,21 +39,30 @@ export async function POST(request) {
         if (!ipCheck.allowed) return rateLimitResponse(ipCheck.retryAfterMs);
 
         const {
+            username,
             firstName,
             lastName,
             email,
             roomCode: requestedRoomCode,
             roomKey,
         } = await request.json();
-        const normalizedFirstName = String(firstName || "").trim();
-        const normalizedLastName = String(lastName || "").trim();
+        const normalizedUsername = String(
+            username || `${firstName || ""} ${lastName || ""}`
+        ).trim().replace(/\s+/g, " ");
         const normalizedEmail = String(email || "").trim().toLowerCase();
         const normalizedRoomCode = normalizeRoomCode(requestedRoomCode);
         const normalizedRoomKey = String(roomKey || "");
 
-        if (!normalizedFirstName || !normalizedLastName || !normalizedEmail) {
+        if (!normalizedUsername || !normalizedEmail) {
             return NextResponse.json(
-                { error: "First name, last name, and email are required." },
+                { error: "Username and email are required." },
+                { status: 400 }
+            );
+        }
+
+        if (normalizedUsername.length > USERNAME_MAX_LENGTH) {
+            return NextResponse.json(
+                { error: `Username cannot be longer than ${USERNAME_MAX_LENGTH} characters.` },
                 { status: 400 }
             );
         }
@@ -94,11 +104,12 @@ export async function POST(request) {
             where: { email: normalizedEmail },
             update: {},
             create: {
-                firstName: normalizedFirstName,
-                lastName: normalizedLastName,
+                firstName: normalizedUsername,
+                lastName: "",
                 email: normalizedEmail,
             },
         });
+        const effectiveUsername = user.firstName || normalizedUsername;
 
         // Persist only a hash of the user-provided room password.
         const roomKeyHash = await bcrypt.hash(normalizedRoomKey, 10);
@@ -113,12 +124,13 @@ export async function POST(request) {
                     data: {
                         roomCode: candidateRoomCode,
                         roomKeyHash,
-                        name: `${normalizedFirstName}'s Room`,
+                        name: `${effectiveUsername}'s Room`,
                         adminId: user.id,
                         members: {
                             create: {
                                 userId: user.id,
                                 status: "APPROVED",
+                                access: "EDIT",
                                 color: pickMemberColor(0),
                             },
                         },
@@ -157,6 +169,7 @@ export async function POST(request) {
             roomCode: room.roomCode,
             roomKey: normalizedRoomKey,
             userId: user.id,
+            username: effectiveUsername,
             color: pickMemberColor(0),
             sessionExpiresAt: session.expiresAtIso,
         });

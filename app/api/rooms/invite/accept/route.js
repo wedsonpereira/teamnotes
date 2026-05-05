@@ -127,6 +127,7 @@ export async function POST(request) {
                     where: { id: membership.id },
                     data: {
                         status: "APPROVED",
+                        access: "VIEW",
                         color: membership.color || pickMemberColor(approvedCount),
                     },
                 });
@@ -142,6 +143,7 @@ export async function POST(request) {
                     roomId: room.id,
                     userId: user.id,
                     status: "APPROVED",
+                    access: "VIEW",
                     color: pickMemberColor(approvedCount),
                 },
             });
@@ -157,13 +159,14 @@ export async function POST(request) {
         const response = NextResponse.json({
             roomId: room.id,
             userId: user.id,
+            username: user.firstName || derivedName.firstName,
             firstName: user.firstName || derivedName.firstName,
-            lastName: user.lastName || derivedName.lastName,
+            lastName: "",
             email: user.email,
             isAdmin: room.adminId === user.id,
             color:
                 finalColor
-                || colorFromName(`${user.firstName || ""}${user.lastName || ""}`),
+                || colorFromName(user.firstName || derivedName.firstName),
             sessionExpiresAt: session.expiresAtIso,
         });
         setRoomSessionCookie(response, session.token);

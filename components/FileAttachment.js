@@ -165,6 +165,12 @@ const FileAttachment = Node.create({
             fileName: { default: null },
             fileSize: { default: null },
             mimeType: { default: null },
+            addedById: {
+                default: null,
+                parseHTML: (el) => el.getAttribute("data-added-by-id"),
+                renderHTML: (attrs) =>
+                    attrs.addedById ? { "data-added-by-id": attrs.addedById } : {},
+            },
             addedBy: {
                 default: null,
                 parseHTML: (el) => el.getAttribute("data-added-by"),
@@ -195,6 +201,7 @@ const FileAttachment = Node.create({
 
     renderHTML({ HTMLAttributes }) {
         const extraAttrs = {};
+        if (HTMLAttributes.addedById) extraAttrs["data-added-by-id"] = HTMLAttributes.addedById;
         if (HTMLAttributes.addedBy) extraAttrs["data-added-by"] = HTMLAttributes.addedBy;
         if (HTMLAttributes.addedByColor) extraAttrs["data-added-by-color"] = HTMLAttributes.addedByColor;
         if (HTMLAttributes.addedAt) extraAttrs["data-added-at"] = HTMLAttributes.addedAt;

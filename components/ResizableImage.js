@@ -2,9 +2,21 @@
 
 import { Node, mergeAttributes } from "@tiptap/core";
 import { NodeViewWrapper, ReactNodeViewRenderer } from "@tiptap/react";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 const DEFAULT_IMAGE_RENDER_WIDTH = 420;
+
+function formatAddedAt(value) {
+    if (!value) return "";
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return "";
+    return date.toLocaleString(undefined, {
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+    });
+}
 
 /* ------------------------------------------------------------------ */
 /*  ResizableImageView — React NodeView                                */
@@ -14,9 +26,11 @@ function ResizableImageView({ node, updateAttributes, selected }) {
     const containerRef = useRef(null);
     const moveStateRef = useRef(null);
     const movePreviewRef = useRef(null);
+    const resizePreviewRef = useRef(null);
     const [resizing, setResizing] = useState(false);
     const [moving, setMoving] = useState(false);
     const [movePreview, setMovePreview] = useState(null);
+    const [resizePreview, setResizePreview] = useState(null);
 
     const {
         src,
@@ -28,7 +42,11 @@ function ResizableImageView({ node, updateAttributes, selected }) {
         leadingSpace,
         offsetX,
         offsetY,
+        addedBy,
+        addedByColor,
+        addedAt,
     } = node.attrs;
+    const [imageStatus, setImageStatus] = useState(src ? "loading" : "error");
     const leadingOffsetPx = Math.max(0, Number(leadingSpace || 0)) * 8;
     const baseOffsetX = Number.isFinite(Number(offsetX)) ? Number(offsetX) : 0;
     const baseOffsetY = Number.isFinite(Number(offsetY)) ? Number(offsetY) : 0;
@@ -40,15 +58,35 @@ function ResizableImageView({ node, updateAttributes, selected }) {
         movePreview && Number.isFinite(movePreview.y)
             ? movePreview.y
             : baseOffsetY;
+    const activeWidth =
+        resizePreview && Number.isFinite(resizePreview.width)
+            ? resizePreview.width
+            : width;
+    const activeHeight =
+        resizePreview && Number.isFinite(resizePreview.height)
+            ? resizePreview.height
+            : height;
+    const displayWidth = activeWidth
+        ? `${activeWidth}px`
+        : `min(${DEFAULT_IMAGE_RENDER_WIDTH}px, 100%)`;
+    const displayHeight = activeHeight ? `${activeHeight}px` : "auto";
+    const addedAtText = formatAddedAt(addedAt);
+
+    useEffect(() => {
+        setImageStatus(src ? "loading" : "error");
+    }, [src]);
 
     const commitMove = useCallback(() => {
         const preview = movePreviewRef.current;
-        if (!preview) return;
+        if (preview) {
+            updateAttributes({
+                offsetX: preview.x,
+                offsetY: preview.y,
+            });
+        }
 
-        updateAttributes({
-            offsetX: preview.x,
-            offsetY: preview.y,
-        });
+        setMovePreview(null);
+        movePreviewRef.current = null;
     }, [updateAttributes]);
 
     const updateMovePreview = useCallback((x, y) => {
@@ -59,6 +97,28 @@ function ResizableImageView({ node, updateAttributes, selected }) {
         movePreviewRef.current = next;
         setMovePreview(next);
     }, []);
+
+    const updateResizePreview = useCallback((nextWidth, nextHeight) => {
+        const next = {
+            width: Math.round(nextWidth),
+            height: Math.round(nextHeight),
+        };
+        resizePreviewRef.current = next;
+        setResizePreview(next);
+    }, []);
+
+    const commitResize = useCallback(() => {
+        const preview = resizePreviewRef.current;
+        if (preview) {
+            updateAttributes({
+                width: preview.width,
+                height: preview.height,
+            });
+        }
+
+        setResizePreview(null);
+        resizePreviewRef.current = null;
+    }, [updateAttributes]);
 
     const startMove = useCallback(
         (clientX, clientY) => {
@@ -151,22 +211,20 @@ function ResizableImageView({ node, updateAttributes, selected }) {
                 let newWidth = Math.max(50, startWidth + delta);
                 let newHeight = Math.round(newWidth / aspectRatio);
 
-                updateAttributes({
-                    width: newWidth,
-                    height: newHeight,
-                });
+                updateResizePreview(newWidth, newHeight);
             };
 
             const onMouseUp = () => {
                 setResizing(false);
                 document.removeEventListener("mousemove", onMouseMove);
                 document.removeEventListener("mouseup", onMouseUp);
+                commitResize();
             };
 
             document.addEventListener("mousemove", onMouseMove);
             document.addEventListener("mouseup", onMouseUp);
         },
-        [updateAttributes]
+        [commitResize, updateResizePreview]
     );
 
     // Touch support for mobile
@@ -201,19 +259,20 @@ function ResizableImageView({ node, updateAttributes, selected }) {
                 let newWidth = Math.max(50, startWidth + delta);
                 let newHeight = Math.round(newWidth / aspectRatio);
 
-                updateAttributes({ width: newWidth, height: newHeight });
+                updateResizePreview(newWidth, newHeight);
             };
 
             const onTouchEnd = () => {
                 setResizing(false);
                 document.removeEventListener("touchmove", onTouchMove);
                 document.removeEventListener("touchend", onTouchEnd);
+                commitResize();
             };
 
             document.addEventListener("touchmove", onTouchMove, { passive: false });
             document.addEventListener("touchend", onTouchEnd);
         },
-        [updateAttributes]
+        [commitResize, updateResizePreview]
     );
 
     const onImageMouseDown = useCallback(
@@ -252,19 +311,38 @@ function ResizableImageView({ node, updateAttributes, selected }) {
             className={`resizable-image-wrapper ${alignment || "center"} ${selected ? "selected" : ""} ${resizing ? "resizing" : ""} ${moving ? "moving" : ""}`}
             style={wrapperStyle}
         >
-            <span className="resizable-image-container" ref={containerRef}>
+            <span
+                className={`resizable-image-container image-${imageStatus}`}
+                ref={containerRef}
+                style={{
+                    width: displayWidth,
+                    maxWidth: "100%",
+                    ...(activeHeight ? { minHeight: displayHeight } : {}),
+                }}
+            >
+                {imageStatus !== "loaded" && (
+                    <span className="resizable-image-state">
+                        <span className="resizable-image-spinner" />
+                        <span>
+                            {imageStatus === "error"
+                                ? "Image could not be loaded"
+                                : "Loading image..."}
+                        </span>
+                    </span>
+                )}
                 <img
                     src={src}
                     alt={alt || ""}
                     title={title || ""}
+                    onLoad={() => setImageStatus("loaded")}
+                    onError={() => setImageStatus("error")}
                     onMouseDown={onImageMouseDown}
                     onTouchStart={onImageTouchStart}
                     style={{
-                        width: width
-                            ? `${width}px`
-                            : `min(${DEFAULT_IMAGE_RENDER_WIDTH}px, 100%)`,
-                        height: height ? `${height}px` : "auto",
+                        width: "100%",
+                        height: displayHeight,
                         maxWidth: "100%",
+                        opacity: imageStatus === "loaded" ? 1 : 0,
                     }}
                     draggable={false}
                 />
@@ -279,6 +357,16 @@ function ResizableImageView({ node, updateAttributes, selected }) {
                             />
                         ))}
                     </>
+                )}
+                {addedBy && (
+                    <span className="resizable-image-author">
+                        <span
+                            className="resizable-image-author-dot"
+                            style={addedByColor ? { background: addedByColor } : undefined}
+                        />
+                        Added by {addedBy}
+                        {addedAtText ? ` • ${addedAtText}` : ""}
+                    </span>
                 )}
             </span>
         </NodeViewWrapper>
@@ -303,6 +391,30 @@ const ResizableImage = Node.create({
             title: { default: null },
             width: { default: null },
             height: { default: null },
+            addedById: {
+                default: null,
+                parseHTML: (element) => element.getAttribute("data-added-by-id"),
+                renderHTML: (attrs) =>
+                    attrs.addedById ? { "data-added-by-id": attrs.addedById } : {},
+            },
+            addedBy: {
+                default: null,
+                parseHTML: (element) => element.getAttribute("data-added-by"),
+                renderHTML: (attrs) =>
+                    attrs.addedBy ? { "data-added-by": attrs.addedBy } : {},
+            },
+            addedByColor: {
+                default: null,
+                parseHTML: (element) => element.getAttribute("data-added-by-color"),
+                renderHTML: (attrs) =>
+                    attrs.addedByColor ? { "data-added-by-color": attrs.addedByColor } : {},
+            },
+            addedAt: {
+                default: null,
+                parseHTML: (element) => element.getAttribute("data-added-at"),
+                renderHTML: (attrs) =>
+                    attrs.addedAt ? { "data-added-at": attrs.addedAt } : {},
+            },
             alignment: { default: "center" },
             leadingSpace: {
                 default: 0,

@@ -16,6 +16,7 @@ const FLOATING_WINDOW_PLACEMENTS = new Set([
     "left-bottom",
     "right-bottom",
 ]);
+const JOIN_REQUEST_TOAST_MS = 8000;
 
 function hexToRgb(value) {
     const hex = String(value || "").replace("#", "").trim();
@@ -25,6 +26,50 @@ function hexToRgb(value) {
     const g = Number.parseInt(hex.slice(2, 4), 16);
     const b = Number.parseInt(hex.slice(4, 6), 16);
     return `${r}, ${g}, ${b}`;
+}
+
+function playJoinRequestSound() {
+    if (typeof window === "undefined") return;
+
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContext) return;
+
+    try {
+        const audioContext = new AudioContext();
+        const oscillator = audioContext.createOscillator();
+        const gain = audioContext.createGain();
+        const now = audioContext.currentTime;
+
+        oscillator.type = "sine";
+        oscillator.frequency.setValueAtTime(880, now);
+        oscillator.frequency.setValueAtTime(1175, now + 0.08);
+        gain.gain.setValueAtTime(0.0001, now);
+        gain.gain.exponentialRampToValueAtTime(0.18, now + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.28);
+
+        oscillator.connect(gain);
+        gain.connect(audioContext.destination);
+        oscillator.start(now);
+        oscillator.stop(now + 0.3);
+        oscillator.onended = () => audioContext.close().catch(() => {});
+    } catch (error) {
+        // Browsers can block sound before user interaction. The toast still appears.
+    }
+}
+
+function showBrowserJoinNotification(request) {
+    if (typeof window === "undefined" || !("Notification" in window)) return;
+    if (window.Notification.permission !== "granted") return;
+
+    const username = request?.username || "A user";
+    try {
+        new window.Notification("New join request", {
+            body: `${username} wants to join this room.`,
+            tag: `teamnote-join-request-${request?.memberId || Date.now()}`,
+        });
+    } catch (error) {
+        // Some browsers reject notifications from non-secure contexts.
+    }
 }
 
 // Dynamically import Editor to avoid SSR issues with Tiptap
@@ -56,7 +101,7 @@ export default function RoomPage() {
     const [accessDenied, setAccessDenied] = useState(false);
     const [pendingApproval, setPendingApproval] = useState(false);
     const [accessChecked, setAccessChecked] = useState(false);
-    const [memberAccess, setMemberAccess] = useState("EDIT");
+    const [memberAccess, setMemberAccess] = useState("VIEW");
     const [theme, setTheme] = useState("dark");
     const [editorBg, setEditorBg] = useState(null);
     const [fontColor, setFontColor] = useState(null);
@@ -67,7 +112,9 @@ export default function RoomPage() {
     const [onlineUsers, setOnlineUsers] = useState([]);
     const [typingUserIds, setTypingUserIds] = useState([]);
     const [activePage, setActivePage] = useState(null);
+    const [joinRequestNotice, setJoinRequestNotice] = useState(null);
     const expiryTimerRef = useRef(null);
+    const joinRequestNoticeTimerRef = useRef(null);
     const ydocCacheRef = useRef(new Map());
     const activePageRef = useRef(null);
     const floatingWindowRef = useRef(null);
@@ -266,7 +313,7 @@ export default function RoomPage() {
 
     const resolvedUserColor = useMemo(() => {
         if (!user) return "#999999";
-        return user.color || getRandomColor(`${user.firstName || ""}${user.lastName || ""}`);
+        return user.color || getRandomColor(user.username || user.firstName || "");
     }, [user]);
 
     const handleSessionExpired = useCallback(() => {
@@ -282,6 +329,21 @@ export default function RoomPage() {
         setConnected(false);
         setTypingUserIds([]);
         router.push("/");
+    }, [router]);
+
+    const handleBackToHome = useCallback(() => {
+        if (expiryTimerRef.current) {
+            clearTimeout(expiryTimerRef.current);
+            expiryTimerRef.current = null;
+        }
+        clearClientSession();
+        setSocket((prev) => {
+            if (prev) prev.disconnect();
+            return null;
+        });
+        setConnected(false);
+        setTypingUserIds([]);
+        router.replace("/");
     }, [router]);
 
     useEffect(() => {
@@ -362,7 +424,7 @@ export default function RoomPage() {
                 }
 
                 setRoomName(data.roomName || "Untitled Room");
-                setMemberAccess(data.access || "EDIT");
+                setMemberAccess(data.access || "VIEW");
                 setAccessChecked(true);
             } catch (err) {
                 console.error("Access check failed:", err);
@@ -406,7 +468,7 @@ export default function RoomPage() {
                 }
 
                 setRoomName(data.roomName || "Untitled Room");
-                setMemberAccess(data.access || "EDIT");
+                setMemberAccess(data.access || "VIEW");
                 setAccessDenied(false);
                 setPendingApproval(false);
                 setAccessChecked(true);
@@ -442,8 +504,9 @@ export default function RoomPage() {
                 pageId: activePageRef.current || null,
                 user: {
                     userId: user.userId,
-                    firstName: user.firstName,
-                    lastName: user.lastName,
+                    username: user.username || user.firstName,
+                    firstName: user.username || user.firstName,
+                    lastName: "",
                     color: resolvedUserColor,
                 },
             });
@@ -480,15 +543,36 @@ export default function RoomPage() {
                     return;
                 }
                 if (!data.error && data.status !== "PENDING") {
-                    setMemberAccess(data.access || "EDIT");
+                    setMemberAccess(data.access || "VIEW");
                 }
             } catch (err) {
                 console.error("Failed to refresh member access:", err);
             }
         });
 
+        socketInstance.on("join-request", (request) => {
+            if (!user.isAdmin) return;
+
+            const username = request?.username || "A user";
+            setJoinRequestNotice({
+                ...request,
+                username,
+                message: `${username} requested to join this room.`,
+            });
+            playJoinRequestSound();
+            showBrowserJoinNotification({ ...request, username });
+
+            if (joinRequestNoticeTimerRef.current) {
+                clearTimeout(joinRequestNoticeTimerRef.current);
+            }
+            joinRequestNoticeTimerRef.current = setTimeout(() => {
+                setJoinRequestNotice(null);
+                joinRequestNoticeTimerRef.current = null;
+            }, JOIN_REQUEST_TOAST_MS);
+        });
+
         socketInstance.on("access-refresh", ({ access }) => {
-            setMemberAccess(access || "EDIT");
+            setMemberAccess(access || "VIEW");
         });
 
         socketInstance.on("access-revoked", ({ roomId: revokedRoomId }) => {
@@ -505,7 +589,12 @@ export default function RoomPage() {
 
         return () => {
             setTypingUserIds([]);
+            if (joinRequestNoticeTimerRef.current) {
+                clearTimeout(joinRequestNoticeTimerRef.current);
+                joinRequestNoticeTimerRef.current = null;
+            }
             socketInstance.off("members-refresh");
+            socketInstance.off("join-request");
             socketInstance.off("access-refresh");
             socketInstance.disconnect();
         };
@@ -523,7 +612,7 @@ export default function RoomPage() {
         return typingUserIds
             .map((id) => onlineUsers.find((u) => u.userId === id))
             .filter(Boolean)
-            .map((u) => `${u.firstName || ""} ${u.lastName || ""}`.trim())
+            .map((u) => u.username || `${u.firstName || ""} ${u.lastName || ""}`.trim())
             .filter(Boolean);
     }, [typingUserIds, onlineUsers]);
 
@@ -776,7 +865,7 @@ export default function RoomPage() {
                 <p style={{ color: "var(--text-secondary)", marginBottom: 24 }}>
                     You don&apos;t have access to this room.
                 </p>
-                <button className="btn btn-primary btn-sm" onClick={() => router.push("/")}>
+                <button className="btn btn-primary btn-sm" onClick={handleBackToHome}>
                     ← Back to Home
                 </button>
             </div>
@@ -811,13 +900,44 @@ export default function RoomPage() {
         );
     }
 
-    const currentUserName = `${user.firstName || ""} ${user.lastName || ""}`.trim();
+    const currentUserName = user.username || `${user.firstName || ""} ${user.lastName || ""}`.trim();
     const canEditRoom = user.isAdmin || memberAccess !== "VIEW";
 
     return (
         <div
             className={`editor-layout ${sidebarCollapsed && !isFloatingWindow ? "sidebar-collapsed" : ""} ${isFloatingWindow ? "floating-window" : ""} ${isEmbeddedFloating ? "embedded-floating" : ""}`}
         >
+            {joinRequestNotice && !isFloatingWindow && (
+                <div className="join-request-toast" role="status" aria-live="polite">
+                    <div className="join-request-toast-icon">
+                        <i className="fa-solid fa-user-plus" />
+                    </div>
+                    <div className="join-request-toast-copy">
+                        <strong>New join request</strong>
+                        <span>{joinRequestNotice.message}</span>
+                    </div>
+                    <button
+                        type="button"
+                        className="join-request-toast-action"
+                        onClick={() => {
+                            setSidebarOpen(true);
+                            setSidebarCollapsed(false);
+                            setJoinRequestNotice(null);
+                        }}
+                    >
+                        Review
+                    </button>
+                    <button
+                        type="button"
+                        className="join-request-toast-close"
+                        aria-label="Dismiss join request notification"
+                        onClick={() => setJoinRequestNotice(null)}
+                    >
+                        <i className="fa-solid fa-xmark" />
+                    </button>
+                </div>
+            )}
+
             {!isFloatingWindow && (
                 <Toolbar
                     roomName={roomName}
@@ -830,8 +950,10 @@ export default function RoomPage() {
                     fontColor={fontColor}
                     onChangeFontColor={setFontColor}
                     typingUsers={typingUsers}
+                    userId={user.userId}
                     userName={currentUserName}
                     userColor={resolvedUserColor}
+                    isAdmin={user.isAdmin}
                     accentPrimary={accentPrimary}
                     accentSecondary={accentSecondary}
                     onChangeAccentPrimary={setAccentPrimary}
@@ -878,6 +1000,7 @@ export default function RoomPage() {
                     fontColor={fontColor}
                     externalYDoc={getOrCreateYDoc(activePage)}
                     readOnly={!canEditRoom}
+                    isAdmin={user.isAdmin}
                 />
             )}
 

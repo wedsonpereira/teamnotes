@@ -285,10 +285,6 @@ export default function Sidebar({
                 const err = await res.json().catch(() => ({}));
                 throw new Error(err.error || "Failed to exit room.");
             }
-            // Notify other members
-            if (socket) {
-                socket.emit("member-status-changed", { roomId });
-            }
             if (onExitRoom) {
                 onExitRoom();
             }
@@ -336,8 +332,20 @@ export default function Sidebar({
         }
     };
 
-    const getInitials = (firstName, lastName) => {
-        return `${(firstName || "")[0] || ""}${(lastName || "")[0] || ""}`.toUpperCase();
+    const getDisplayName = (member) => (
+        member?.username ||
+        `${member?.firstName || ""} ${member?.lastName || ""}`.trim() ||
+        "Member"
+    );
+
+    const getInitials = (name) => {
+        return String(name || "M")
+            .trim()
+            .split(/\s+/)
+            .slice(0, 2)
+            .map((part) => part[0] || "")
+            .join("")
+            .toUpperCase();
     };
 
     const getAvatarColor = (name) => {
@@ -497,16 +505,14 @@ export default function Sidebar({
                                 <div
                                     className="member-avatar"
                                     style={{
-                                        background: member.color || getAvatarColor(
-                                            member.firstName + member.lastName
-                                        ),
+                                        background: member.color || getAvatarColor(getDisplayName(member)),
                                     }}
                                 >
-                                    {getInitials(member.firstName, member.lastName)}
+                                    {getInitials(getDisplayName(member))}
                                 </div>
                                 <div className="member-info">
                                     <div className="member-name">
-                                        {member.firstName} {member.lastName}
+                                        {getDisplayName(member)}
                                     </div>
                                     <div className="member-role">
                                         {member.isAdmin
@@ -524,7 +530,7 @@ export default function Sidebar({
                                     <>
                                     <select
                                         className="member-access-select"
-                                        value={member.access || "EDIT"}
+                                        value={member.access || "VIEW"}
                                         title="Member access"
                                         onChange={(event) =>
                                             handleMemberAccessChange(member, event.target.value)
@@ -636,19 +642,17 @@ export default function Sidebar({
                                 <div
                                     className="member-avatar"
                                     style={{
-                                        background: getAvatarColor(
-                                            member.firstName + member.lastName
-                                        ),
+                                        background: getAvatarColor(getDisplayName(member)),
                                         width: 28,
                                         height: 28,
                                         fontSize: 11,
                                     }}
                                 >
-                                    {getInitials(member.firstName, member.lastName)}
+                                    {getInitials(getDisplayName(member))}
                                 </div>
                                 <div className="member-info">
                                     <div className="member-name" style={{ fontSize: 13 }}>
-                                        {member.firstName} {member.lastName}
+                                        {getDisplayName(member)}
                                     </div>
                                 </div>
                                 <div className="request-actions">
@@ -862,7 +866,7 @@ export default function Sidebar({
                         <p className="modal-subtitle" style={{ marginBottom: 20 }}>
                             Remove{" "}
                             <strong>
-                                {removeDialogMember.firstName} {removeDialogMember.lastName}
+                                {getDisplayName(removeDialogMember)}
                             </strong>{" "}
                             from this room?
                         </p>

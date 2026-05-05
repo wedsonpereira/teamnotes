@@ -1,0 +1,2 @@
+ALTER TABLE "RoomMember"
+ALTER COLUMN "access" SET DEFAULT 'VIEW';

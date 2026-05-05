@@ -2,6 +2,7 @@ import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
 import { readRoomSessionFromRequest } from "@/lib/session";
 import { logError } from "@/lib/logger";
+import { emitRoomSettingsRefresh } from "@/lib/realtime";
 
 // PATCH /api/rooms/[roomId]/settings — Update room settings
 export async function PATCH(request, { params }) {
@@ -31,6 +32,8 @@ export async function PATCH(request, { params }) {
             where: { id: roomId },
             data: updateData,
         });
+
+        emitRoomSettingsRefresh(roomId);
 
         return NextResponse.json({
             message: "Settings updated.",

@@ -101,10 +101,11 @@ export async function POST(request) {
         const response = NextResponse.json({
             roomId: room.id,
             userId: user.id,
+            username: user.firstName,
             firstName: user.firstName,
-            lastName: user.lastName,
+            lastName: "",
             isAdmin: room.adminId === user.id,
-            color: membership.color || colorFromName(user.firstName + user.lastName),
+            color: membership.color || colorFromName(user.firstName),
             sessionExpiresAt: session.expiresAtIso,
         });
         setRoomSessionCookie(response, session.token);

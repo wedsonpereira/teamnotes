@@ -19,6 +19,7 @@ import ReactDOM from "react-dom";
 import { useEffect, useRef, useCallback, useMemo, useState } from "react";
 import pako from "pako";
 import { encryptToBase64, decryptFromBase64 } from "@/lib/crypto";
+import { isImageFile, readFileAsDataUrl, readImageAsRenderableDataUrl } from "@/lib/clientUploads";
 
 /* ------------------------------------------------------------------ */
 /*  AuthorHighlight Mark                                               */
@@ -237,6 +238,8 @@ const TableCell = Node.create({
 const authorTrackKey = new PluginKey("authorTrack");
 const REMOTE_SOCKET_ORIGIN = "socket-remote";
 const TYPING_STATUS_THROTTLE_MS = 80;
+const YJS_SOCKET_CHUNK_BYTES = 256 * 1024;
+const SOCKET_UPDATE_WARN_BYTES = 10 * 1024 * 1024;
 const DEFAULT_HIGHLIGHT_COLOR = "#fff59d";
 const IMAGE_DRAG_MIME = "application/x-teamnote-image-pos";
 const IMAGE_DRAG_FALLBACK_KEY = "__teamnoteImageDragPos";
@@ -300,6 +303,15 @@ function isLocalEditorDocTransaction(transaction) {
     return true;
 }
 
+function hasYjsEditorContent(ydoc) {
+    if (!ydoc) return false;
+    try {
+        return ydoc.getXmlFragment("default").length > 0;
+    } catch {
+        return false;
+    }
+}
+
 function getInsertPosAfterSelectedMediaSelection(selection) {
     const selectedNode = selection?.node;
     if (!selectedNode) return null;
@@ -316,6 +328,127 @@ function getInsertPosAfterSelectedMediaNode(editorInstance) {
     return getInsertPosAfterSelectedMediaSelection(
         editorInstance?.state?.selection
     );
+}
+
+function normalizeOwnerName(value) {
+    return String(value || "").trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function isOwnedByCurrentUser(attrs, userId, userName) {
+    if (!attrs || typeof attrs !== "object") return true;
+    if (attrs.addedById) return attrs.addedById === userId;
+    if (attrs.addedBy) {
+        return normalizeOwnerName(attrs.addedBy) === normalizeOwnerName(userName);
+    }
+    return true;
+}
+
+function rangeContainsProtectedContent(doc, from, to, { userId, userName, isAdmin }) {
+    if (isAdmin || !doc) return false;
+
+    const docSize = doc.content.size;
+    const safeFrom = Math.max(0, Math.min(from, docSize));
+    const safeTo = Math.max(0, Math.min(to, docSize));
+    if (safeTo <= safeFrom) return false;
+
+    let protectedContent = false;
+    doc.nodesBetween(safeFrom, safeTo, (node) => {
+        if (protectedContent) return false;
+
+        if (
+            (node.type?.name === "image" || node.type?.name === "fileAttachment") &&
+            !isOwnedByCurrentUser(node.attrs, userId, userName)
+        ) {
+            protectedContent = true;
+            return false;
+        }
+
+        if (node.isText) {
+            const otherAuthorMark = node.marks?.find((mark) => (
+                mark.type?.name === "authorHighlight" &&
+                mark.attrs?.name &&
+                normalizeOwnerName(mark.attrs.name) !== normalizeOwnerName(userName)
+            ));
+            if (otherAuthorMark) {
+                protectedContent = true;
+                return false;
+            }
+        }
+
+        return true;
+    });
+
+    return protectedContent;
+}
+
+function getProtectedDeletionRange(state, event) {
+    const selection = state.selection;
+    if (!selection) return null;
+
+    if (!selection.empty) {
+        return { from: selection.from, to: selection.to };
+    }
+
+    if (event.key === "Backspace") {
+        return {
+            from: Math.max(0, selection.from - 1),
+            to: selection.from,
+        };
+    }
+
+    if (event.key === "Delete") {
+        return {
+            from: selection.from,
+            to: Math.min(state.doc.content.size, selection.from + 1),
+        };
+    }
+
+    return null;
+}
+
+function eventWouldModifyProtectedContent(view, event, ownershipCheck) {
+    const state = view?.state;
+    const selection = state?.selection;
+    if (!state || !selection || ownershipCheck.isAdmin) return false;
+
+    const inputType = event?.inputType || "";
+    if (inputType.startsWith("delete")) {
+        let range = null;
+        if (!selection.empty) {
+            range = { from: selection.from, to: selection.to };
+        } else if (inputType.includes("Backward")) {
+            range = {
+                from: Math.max(0, selection.from - 1),
+                to: selection.from,
+            };
+        } else {
+            range = {
+                from: selection.from,
+                to: Math.min(state.doc.content.size, selection.from + 1),
+            };
+        }
+
+        return rangeContainsProtectedContent(
+            state.doc,
+            range.from,
+            range.to,
+            ownershipCheck
+        );
+    }
+
+    if (
+        !selection.empty &&
+        (inputType.startsWith("insert") || inputType === "formatSetBlockTextDirection")
+    ) {
+        return rangeContainsProtectedContent(
+            state.doc,
+            selection.from,
+            selection.to,
+            ownershipCheck
+        );
+    }
+
+    return false;
 }
 
 function parseIntSafe(value) {
@@ -1124,17 +1257,40 @@ function normalizeBinaryUpdatePayload(input) {
     return null;
 }
 
-function isImageFile(file) {
-    return Boolean(file && typeof file.type === "string" && file.type.startsWith("image/"));
+function createUpdateId() {
+    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+        return crypto.randomUUID();
+    }
+    return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
-function readFileAsDataUrl(file) {
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(String(reader.result || ""));
-        reader.onerror = () => reject(new Error("Failed to read file."));
-        reader.readAsDataURL(file);
-    });
+function emitYjsSocketPayload(socket, eventName, payload) {
+    const update = normalizeBinaryUpdatePayload(payload?.update);
+    if (!socket || !update) return;
+
+    if (update.byteLength <= YJS_SOCKET_CHUNK_BYTES) {
+        socket.emit(eventName, {
+            ...payload,
+            update,
+        });
+        return;
+    }
+
+    const updateId = createUpdateId();
+    const total = Math.ceil(update.byteLength / YJS_SOCKET_CHUNK_BYTES);
+    const { update: _update, ...rest } = payload;
+
+    for (let index = 0; index < total; index += 1) {
+        const start = index * YJS_SOCKET_CHUNK_BYTES;
+        const end = Math.min(start + YJS_SOCKET_CHUNK_BYTES, update.byteLength);
+        socket.emit(`${eventName}-chunk`, {
+            ...rest,
+            updateId,
+            index,
+            total,
+            chunk: update.slice(start, end),
+        });
+    }
 }
 
 function normalizeFontSize(value) {
@@ -1157,6 +1313,7 @@ function applyPlaceholderFontSize(editorInstance, fontSizeValue) {
 
 // Maximum file size: 5 MB (stored as base64 in Yjs doc)
 const MAX_FILE_SIZE = 5 * 1024 * 1024;
+const MAX_INLINE_IMAGE_SIZE = 2 * 1024 * 1024;
 const DEFAULT_IMAGE_INSERT_WIDTH = 420;
 
 export default function Editor({
@@ -1175,6 +1332,7 @@ export default function Editor({
     onChangeShowLineNumbers,
     externalYDoc,
     readOnly = false,
+    isAdmin = false,
 }) {
     const saveTimerRef = useRef(null);
     const ydocRef = useRef(null);
@@ -1182,11 +1340,15 @@ export default function Editor({
     const initialContentLoadedRef = useRef(false);
     const userInteractedRef = useRef(false);
     const ydocActivityRef = useRef(false);
+    const yjsChunkBuffersRef = useRef(new Map());
+    const lifecycleSaveRef = useRef(false);
+    const mountedRef = useRef(true);
     const typingTimerRef = useRef(null);
     const typingRafRef = useRef(null);
     const lastTypingEmitRef = useRef(0);
     const editorRef = useRef(null);
     const readOnlyRef = useRef(readOnly);
+    const isAdminRef = useRef(isAdmin);
     const savedSelectionRef = useRef(null);
     const contextMenuRef = useRef(null);
     const [showContextMenu, setShowContextMenu] = useState(false);
@@ -1204,6 +1366,10 @@ export default function Editor({
     useEffect(() => {
         readOnlyRef.current = readOnly;
     }, [readOnly]);
+
+    useEffect(() => {
+        isAdminRef.current = isAdmin;
+    }, [isAdmin]);
 
     // Use an externally-cached Yjs document when provided so that
     // switching back to a previously-visited page is instant (the
@@ -1232,23 +1398,33 @@ export default function Editor({
                     continue;
                 }
 
-                const src = await readFileAsDataUrl(file);
-                if (!src) continue;
-
                 if (isImageFile(file)) {
+                    const src = await readImageAsRenderableDataUrl(file, {
+                        maxBytes: MAX_INLINE_IMAGE_SIZE,
+                    });
+                    if (!src) continue;
+
                     contentToInsert.push({
                         type: "image",
                         attrs: {
                             src,
                             width: DEFAULT_IMAGE_INSERT_WIDTH,
+                            addedById: userId || null,
+                            addedBy: userName || null,
+                            addedByColor: userColor || null,
+                            addedAt: new Date().toISOString(),
                         },
                     });
                 } else {
+                    const src = await readFileAsDataUrl(file);
+                    if (!src) continue;
+
                     const attachmentAttrs = {
                         src,
                         fileName: file.name,
                         fileSize: file.size,
                         mimeType: file.type,
+                        addedById: userId || null,
                         addedBy: userName || null,
                         addedByColor: userColor || null,
                         addedAt: new Date().toISOString(),
@@ -1339,10 +1515,56 @@ export default function Editor({
                 mousedown: (view, event) =>
                     readOnlyRef.current ? false :
                     maybeStartTablePointerAction(view, event),
+                beforeinput: (view, event) => {
+                    if (readOnlyRef.current || isAdminRef.current) return false;
+                    if (
+                        eventWouldModifyProtectedContent(view, event, {
+                            userId,
+                            userName,
+                            isAdmin: false,
+                        })
+                    ) {
+                        event.preventDefault();
+                        return true;
+                    }
+                    return false;
+                },
+                cut: (view, event) => {
+                    if (readOnlyRef.current || isAdminRef.current) return false;
+                    const selection = view.state.selection;
+                    if (
+                        selection &&
+                        !selection.empty &&
+                        rangeContainsProtectedContent(
+                            view.state.doc,
+                            selection.from,
+                            selection.to,
+                            { userId, userName, isAdmin: false }
+                        )
+                    ) {
+                        event.preventDefault();
+                        return true;
+                    }
+                    return false;
+                },
             },
             handleKeyDown: (view, event) => {
                 if (readOnlyRef.current) return false;
                 if (event.key === "Backspace" || event.key === "Delete") {
+                    const tableRange = getSelectedTableRange(view.state.selection);
+                    if (
+                        tableRange &&
+                        !isAdminRef.current &&
+                        rangeContainsProtectedContent(
+                            view.state.doc,
+                            tableRange.from,
+                            tableRange.to,
+                            { userId, userName, isAdmin: false }
+                        )
+                    ) {
+                        event.preventDefault();
+                        return true;
+                    }
                     if (deleteSelectedTable(view, event)) return true;
                 }
 
@@ -1351,6 +1573,62 @@ export default function Editor({
                 }
 
                 const selection = view.state.selection;
+                const hasModifierKey =
+                    event.ctrlKey || event.metaKey || event.altKey;
+                const isSpace =
+                    event.key === " " ||
+                    event.key === "Spacebar" ||
+                    event.code === "Space";
+                const isBackspace = event.key === "Backspace";
+                const isDelete = event.key === "Delete";
+                const isPlainTypingKey =
+                    event.key.length === 1 &&
+                    !hasModifierKey &&
+                    !isSpace;
+                const ownershipCheck = {
+                    userId,
+                    userName,
+                    isAdmin: isAdminRef.current,
+                };
+
+                if (
+                    !isAdminRef.current &&
+                    (isBackspace || isDelete) &&
+                    !hasModifierKey
+                ) {
+                    const protectedRange = getProtectedDeletionRange(
+                        view.state,
+                        event
+                    );
+                    if (
+                        protectedRange &&
+                        rangeContainsProtectedContent(
+                            view.state.doc,
+                            protectedRange.from,
+                            protectedRange.to,
+                            ownershipCheck
+                        )
+                    ) {
+                        event.preventDefault();
+                        return true;
+                    }
+                }
+
+                if (
+                    !isAdminRef.current &&
+                    (isPlainTypingKey || isSpace) &&
+                    !selection.empty &&
+                    rangeContainsProtectedContent(
+                        view.state.doc,
+                        selection.from,
+                        selection.to,
+                        ownershipCheck
+                    )
+                ) {
+                    event.preventDefault();
+                    return true;
+                }
+
                 const selectedNode = selection?.node;
                 if (!selectedNode) return false;
 
@@ -1361,21 +1639,13 @@ export default function Editor({
 
                 if (!isUploadNode) return false;
 
-                const isSpace =
-                    event.key === " " ||
-                    event.key === "Spacebar" ||
-                    event.code === "Space";
-                const isBackspace = event.key === "Backspace";
-                const isDelete = event.key === "Delete";
-                const hasModifierKey =
-                    event.ctrlKey || event.metaKey || event.altKey;
-                const isPlainTypingKey =
-                    event.key.length === 1 &&
-                    !hasModifierKey &&
-                    !isSpace;
+                const canModifyUploadNode =
+                    isAdminRef.current ||
+                    isOwnedByCurrentUser(selectedNode.attrs, userId, userName);
 
                 if ((isBackspace || isDelete) && !hasModifierKey) {
                     event.preventDefault();
+                    if (!canModifyUploadNode) return true;
 
                     // Backspace on selected image should reduce visual left gap
                     // first, not remove the image node.
@@ -1438,6 +1708,7 @@ export default function Editor({
                 // nudges that image forward, instead of replacing it or typing after it.
                 if (isSpace && selectedNodeType === "image") {
                     event.preventDefault();
+                    if (!canModifyUploadNode) return true;
                     const pos = selection.from;
                     const currentLeading = Math.max(
                         0,
@@ -1471,6 +1742,21 @@ export default function Editor({
             },
             handlePaste: (view, event) => {
                 if (readOnlyRef.current) return false;
+                const pasteSelection = view.state.selection;
+                if (
+                    !isAdminRef.current &&
+                    pasteSelection &&
+                    !pasteSelection.empty &&
+                    rangeContainsProtectedContent(
+                        view.state.doc,
+                        pasteSelection.from,
+                        pasteSelection.to,
+                        { userId, userName, isAdmin: false }
+                    )
+                ) {
+                    event.preventDefault();
+                    return true;
+                }
                 const insertPos = getInsertPosAfterSelectedMediaSelection(
                     view.state.selection
                 );
@@ -1826,11 +2112,22 @@ export default function Editor({
     const deleteContextSelection = useCallback(() => {
         const range = getSavedSelectionRange();
         if (!range || range.from === range.to) return;
+        if (
+            !isAdminRef.current &&
+            rangeContainsProtectedContent(
+                editor?.state?.doc,
+                range.from,
+                range.to,
+                { userId, userName, isAdmin: false }
+            )
+        ) {
+            return;
+        }
 
         runFormatCommand((chain) => {
             chain.deleteSelection();
         });
-    }, [getSavedSelectionRange, runFormatCommand]);
+    }, [editor, getSavedSelectionRange, runFormatCommand, userId, userName]);
 
     const handleClipboardAction = useCallback(
         async (action) => {
@@ -1841,11 +2138,38 @@ export default function Editor({
                 if (action === "copy") {
                     document.execCommand("copy");
                 } else if (action === "cut") {
+                    const range = getSavedSelectionRange();
+                    if (
+                        range &&
+                        !isAdminRef.current &&
+                        rangeContainsProtectedContent(
+                            editor.state.doc,
+                            range.from,
+                            range.to,
+                            { userId, userName, isAdmin: false }
+                        )
+                    ) {
+                        return;
+                    }
                     document.execCommand("cut");
                 } else if (action === "paste") {
                     if (navigator?.clipboard?.readText) {
                         const text = await navigator.clipboard.readText();
                         if (text) {
+                            const range = getSavedSelectionRange();
+                            if (
+                                range &&
+                                range.from !== range.to &&
+                                !isAdminRef.current &&
+                                rangeContainsProtectedContent(
+                                    editor.state.doc,
+                                    range.from,
+                                    range.to,
+                                    { userId, userName, isAdmin: false }
+                                )
+                            ) {
+                                return;
+                            }
                             editor.chain().focus().insertContent(text).run();
                         }
                     } else {
@@ -1858,7 +2182,7 @@ export default function Editor({
 
             closeContextMenu();
         },
-        [editor, closeContextMenu]
+        [editor, closeContextMenu, getSavedSelectionRange, userId, userName]
     );
 
     useEffect(() => {
@@ -1898,6 +2222,7 @@ export default function Editor({
     // Auto-save: encode Yjs state -> compress -> encrypt -> POST
     const autoSave = useCallback(async () => {
         if (readOnly) return;
+        const isLifecycleSave = lifecycleSaveRef.current;
         try {
             if (onContentChange) onContentChange(true);
 
@@ -1934,14 +2259,27 @@ export default function Editor({
 
             if (onContentChange) onContentChange("saved");
         } catch (err) {
-            console.error("Auto-save failed:", err);
-            if (onContentChange) onContentChange(false);
+            const message = String(err?.message || "");
+            const browserCancelledRequest =
+                err?.name === "AbortError" ||
+                message === "Failed to fetch" ||
+                message.includes("Load failed");
+
+            if (!isLifecycleSave && mountedRef.current && !browserCancelledRequest) {
+                console.error("Auto-save failed:", err);
+            } else if (!isLifecycleSave && mountedRef.current) {
+                console.warn("Auto-save request was interrupted.");
+            }
+
+            if (mountedRef.current && onContentChange) onContentChange(false);
         }
     }, [roomId, userId, roomKey, onContentChange, onSessionExpired, ydoc, pageId, readOnly]);
 
     useEffect(() => {
         const markActivity = () => {
-            ydocActivityRef.current = true;
+            if (hasYjsEditorContent(ydoc)) {
+                ydocActivityRef.current = true;
+            }
         };
         ydoc.on("update", markActivity);
         return () => {
@@ -1950,15 +2288,32 @@ export default function Editor({
     }, [ydoc]);
 
     useEffect(() => {
+        const remoteSaveTimerRef = { current: null };
         const handler = (_update, origin) => {
             if (!providerReadyRef.current) return;
-            if (origin === REMOTE_SOCKET_ORIGIN) return;
+            if (origin === REMOTE_SOCKET_ORIGIN) {
+                // Remote updates: save with a longer debounce as safety net.
+                // The server also saves, but this ensures client-side encryption
+                // is preserved for rooms that use a room key.
+                if (!remoteSaveTimerRef.current) {
+                    remoteSaveTimerRef.current = setTimeout(() => {
+                        remoteSaveTimerRef.current = null;
+                        autoSave();
+                    }, 60000);
+                }
+                return;
+            }
             if (!userInteractedRef.current) return;
             if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-            saveTimerRef.current = setTimeout(autoSave, 5000);
+            saveTimerRef.current = setTimeout(autoSave, 3000);
         };
         ydoc.on("update", handler);
-        return () => ydoc.off("update", handler);
+        return () => {
+            ydoc.off("update", handler);
+            if (remoteSaveTimerRef.current) {
+                clearTimeout(remoteSaveTimerRef.current);
+            }
+        };
     }, [ydoc, autoSave]);
 
     useEffect(() => {
@@ -1968,10 +2323,14 @@ export default function Editor({
             if (readOnly) return;
             // Prevent rebroadcast loops for updates applied from socket events.
             if (origin === REMOTE_SOCKET_ORIGIN) return;
+            if (update?.byteLength > SOCKET_UPDATE_WARN_BYTES) {
+                console.warn(
+                    "Large editor update may take longer to sync:",
+                    `${Math.round(update.byteLength / 1024 / 1024)} MB`
+                );
+            }
 
-            // Send Uint8Array directly — Socket.IO handles binary
-            // encoding natively (much smaller than Array.from JSON).
-            socket.emit("yjs-update", {
+            emitYjsSocketPayload(socket, "yjs-update", {
                 roomId,
                 pageId: pageId || null,
                 update: new Uint8Array(update),
@@ -2004,6 +2363,56 @@ export default function Editor({
             }
         };
 
+        const applyRemoteChunk = (payload) => {
+            const updateId = String(payload?.updateId || "");
+            const index = Number(payload?.index);
+            const total = Number(payload?.total);
+            const chunk = normalizeBinaryUpdatePayload(payload?.chunk);
+
+            if (!updateId || !Number.isInteger(index) || !Number.isInteger(total)) return;
+            if (total <= 0 || total > 128 || index < 0 || index >= total) return;
+            if (!chunk || chunk.byteLength === 0) return;
+
+            const incomingPageId = payload?.pageId || null;
+            const myPageId = pageId || null;
+            if (incomingPageId !== myPageId) return;
+
+            const buffers = yjsChunkBuffersRef.current;
+            let entry = buffers.get(updateId);
+            if (!entry) {
+                entry = {
+                    total,
+                    chunks: new Array(total),
+                    received: 0,
+                    bytes: 0,
+                    pageId: incomingPageId,
+                };
+                buffers.set(updateId, entry);
+            }
+
+            if (entry.total !== total || entry.chunks[index]) return;
+
+            entry.chunks[index] = chunk;
+            entry.received += 1;
+            entry.bytes += chunk.byteLength;
+
+            if (entry.received !== entry.total) return;
+
+            buffers.delete(updateId);
+            const merged = new Uint8Array(entry.bytes);
+            let offset = 0;
+            for (const part of entry.chunks) {
+                if (!part) return;
+                merged.set(part, offset);
+                offset += part.byteLength;
+            }
+
+            applyRemoteUpdate({
+                update: merged,
+                pageId: entry.pageId,
+            });
+        };
+
         const requestState = () => {
             socket.emit("yjs-request-state", { roomId, pageId: pageId || null });
         };
@@ -2011,6 +2420,8 @@ export default function Editor({
         ydoc.on("update", emitLocalUpdate);
         socket.on("yjs-update", applyRemoteUpdate);
         socket.on("yjs-sync", applyRemoteUpdate);
+        socket.on("yjs-update-chunk", applyRemoteChunk);
+        socket.on("yjs-sync-chunk", applyRemoteChunk);
         socket.on("connect", requestState);
 
         if (socket.connected) {
@@ -2021,7 +2432,10 @@ export default function Editor({
             ydoc.off("update", emitLocalUpdate);
             socket.off("yjs-update", applyRemoteUpdate);
             socket.off("yjs-sync", applyRemoteUpdate);
+            socket.off("yjs-update-chunk", applyRemoteChunk);
+            socket.off("yjs-sync-chunk", applyRemoteChunk);
             socket.off("connect", requestState);
+            yjsChunkBuffersRef.current.clear();
         };
     }, [socket, roomId, userId, ydoc, pageId, readOnly]);
 
@@ -2077,7 +2491,7 @@ export default function Editor({
 
         // If the Yjs doc already has content (e.g. from cache), mark as
         // ready immediately and skip the network fetch entirely.
-        const hasRuntimeState = Y.encodeStateAsUpdate(ydoc).length > 2;
+        const hasRuntimeState = hasYjsEditorContent(ydoc);
         if (hasRuntimeState) {
             providerReadyRef.current = true;
             return;
@@ -2103,8 +2517,7 @@ export default function Editor({
                     return;
                 }
 
-                const hasRuntimeState =
-                    Y.encodeStateAsUpdate(ydoc).length > 2;
+                const hasRuntimeState = hasYjsEditorContent(ydoc);
                 if (hasRuntimeState) {
                     return;
                 }
@@ -2159,11 +2572,48 @@ export default function Editor({
 
     useEffect(() => {
         return () => {
+            mountedRef.current = false;
             if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
             if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
             if (typingRafRef.current) cancelAnimationFrame(typingRafRef.current);
         };
     }, []);
+
+    // Flush pending save when the user navigates away or hides the page.
+    useEffect(() => {
+        if (readOnly) return;
+
+        const flushSave = () => {
+            if (saveTimerRef.current) {
+                clearTimeout(saveTimerRef.current);
+                saveTimerRef.current = null;
+            }
+            if (!ydocActivityRef.current) return;
+            if (!hasYjsEditorContent(ydoc)) return;
+            lifecycleSaveRef.current = true;
+            void autoSave().finally(() => {
+                lifecycleSaveRef.current = false;
+            });
+        };
+
+        const handleBeforeUnload = () => {
+            flushSave();
+        };
+
+        const handleVisibilityChange = () => {
+            if (document.visibilityState === "hidden") {
+                flushSave();
+            }
+        };
+
+        window.addEventListener("beforeunload", handleBeforeUnload);
+        document.addEventListener("visibilitychange", handleVisibilityChange);
+
+        return () => {
+            window.removeEventListener("beforeunload", handleBeforeUnload);
+            document.removeEventListener("visibilitychange", handleVisibilityChange);
+        };
+    }, [autoSave, ydoc, readOnly]);
 
     useEffect(() => {
         if (typeof window === "undefined") return;

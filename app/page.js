@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
+import { io } from "socket.io-client";
 import Badge from "@/components/landing/Badge";
 import HeroTitle from "@/components/landing/HeroTitle";
 import ActionButtons from "@/components/landing/ActionButtons";
@@ -9,6 +10,7 @@ import ThemeToggle from "@/components/landing/ThemeToggle";
 import { saveClientSession, readClientSession } from "@/lib/clientSession";
 
 const PENDING_APPROVAL_POLL_MS = 5000;
+const USERNAME_MAX_LENGTH = 48;
 
 const FALLBACK_SESSION_TTL_MS = 180 * 60 * 60 * 1000;
 
@@ -55,8 +57,7 @@ export default function LandingPage() {
     }, [router]);
 
     // Form state
-    const [firstName, setFirstName] = useState("");
-    const [lastName, setLastName] = useState("");
+    const [username, setUsername] = useState("");
     const [email, setEmail] = useState("");
     const [roomId, setRoomId] = useState("");
     const [roomKey, setRoomKey] = useState("");
@@ -73,6 +74,7 @@ export default function LandingPage() {
         userId,
         roomId: targetRoomId,
         roomKeyValue,
+        usernameValue,
         firstNameValue,
         lastNameValue,
         emailValue,
@@ -80,10 +82,14 @@ export default function LandingPage() {
         colorValue = null,
         sessionExpiresAt,
     }) => {
+        const normalizedUsername =
+            usernameValue ||
+            `${firstNameValue || ""} ${lastNameValue || ""}`.trim();
         saveClientSession({
             userId,
-            firstName: firstNameValue,
-            lastName: lastNameValue,
+            username: normalizedUsername,
+            firstName: normalizedUsername,
+            lastName: "",
             email: emailValue,
             isAdmin: Boolean(isAdminValue),
             roomId: targetRoomId,
@@ -148,8 +154,9 @@ export default function LandingPage() {
                     userId: data.userId,
                     roomId: data.roomId,
                     roomKeyValue: null,
-                    firstNameValue: data.firstName,
-                    lastNameValue: data.lastName,
+                    usernameValue: data.username || data.firstName,
+                    firstNameValue: data.username || data.firstName,
+                    lastNameValue: "",
                     emailValue: data.email,
                     isAdminValue: data.isAdmin || false,
                     colorValue: data.color,
@@ -171,8 +178,7 @@ export default function LandingPage() {
     }, [inviteToken, persistSessionAndEnter]);
 
     const resetForm = () => {
-        setFirstName("");
-        setLastName("");
+        setUsername("");
         setEmail("");
         setRoomId("");
         setRoomKey("");
@@ -202,8 +208,20 @@ export default function LandingPage() {
         e.preventDefault();
         setError("");
 
-        if (createRoomPassword.length < 4) {
-            setError("Password must be at least 4 characters.");
+        const normalizedUsername = username.trim().replace(/\s+/g, " ");
+
+        if (!normalizedUsername) {
+            setError("Username is required.");
+            return;
+        }
+
+        if (normalizedUsername.length > USERNAME_MAX_LENGTH) {
+            setError(`Username cannot be longer than ${USERNAME_MAX_LENGTH} characters.`);
+            return;
+        }
+
+        if (createRoomPassword.length < 8) {
+            setError("Password must be at least 8 characters.");
             return;
         }
 
@@ -224,8 +242,7 @@ export default function LandingPage() {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
-                    firstName,
-                    lastName,
+                    username: normalizedUsername,
                     email,
                     roomCode: createRoomId,
                     roomKey: createRoomPassword,
@@ -256,7 +273,7 @@ export default function LandingPage() {
             const res = await fetch("/api/rooms/join", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ firstName, lastName, email, roomCode: roomId, roomKey }),
+                body: JSON.stringify({ username, email, roomCode: roomId, roomKey }),
             });
 
             const data = await res.json();
@@ -275,11 +292,11 @@ export default function LandingPage() {
                     roomId: data.roomId,
                     roomCode: roomId,
                     userId: data.userId,
-                    firstName,
-                    lastName,
+                    username: data.username || username,
                     email,
                     roomKey,
                     color: data.color,
+                    sessionExpiresAt: data.sessionExpiresAt,
                 });
                 return;
             }
@@ -288,8 +305,9 @@ export default function LandingPage() {
                 userId: data.userId,
                 roomId: data.roomId,
                 roomKeyValue: roomKey,
-                firstNameValue: firstName,
-                lastNameValue: lastName,
+                usernameValue: data.username || username,
+                firstNameValue: data.username || username,
+                lastNameValue: "",
                 emailValue: email,
                 isAdminValue: data.isAdmin || false,
                 colorValue: data.color,
@@ -355,8 +373,9 @@ export default function LandingPage() {
                     userId: reenterData.userId,
                     roomId: reenterData.roomId,
                     roomKeyValue: success.roomKey,
-                    firstNameValue: reenterData.firstName || success.firstName,
-                    lastNameValue: reenterData.lastName || success.lastName,
+                    usernameValue: reenterData.username || success.username || reenterData.firstName || success.firstName,
+                    firstNameValue: reenterData.username || success.username || reenterData.firstName || success.firstName,
+                    lastNameValue: "",
                     emailValue: success.email,
                     isAdminValue: reenterData.isAdmin || false,
                     colorValue: reenterData.color || success.color,
@@ -370,12 +389,23 @@ export default function LandingPage() {
         };
 
         void checkApprovalStatus();
+        const pendingSocket = io({
+            path: "/socket.io",
+            transports: ["websocket", "polling"],
+        });
+        pendingSocket.on("connect", () => {
+            pendingSocket.emit("watch-room-approval", { roomId: success.roomId });
+        });
+        pendingSocket.on("approval-refresh", checkApprovalStatus);
+
         const intervalId = setInterval(() => {
             void checkApprovalStatus();
         }, PENDING_APPROVAL_POLL_MS);
 
         return () => {
             cancelled = true;
+            pendingSocket.off("approval-refresh", checkApprovalStatus);
+            pendingSocket.disconnect();
             clearInterval(intervalId);
         };
     }, [modal, success, persistSessionAndEnter]);
@@ -387,8 +417,9 @@ export default function LandingPage() {
             userId: success.userId,
             roomId: success.roomId,
             roomKeyValue: success.roomKey,
-            firstNameValue: firstName,
-            lastNameValue: lastName,
+            usernameValue: success.username || username,
+            firstNameValue: success.username || username,
+            lastNameValue: "",
             emailValue: email,
             isAdminValue: true,
             colorValue: success.color,
@@ -419,8 +450,9 @@ export default function LandingPage() {
                 userId: data.userId,
                 roomId: data.roomId,
                 roomKeyValue: roomKey,
-                firstNameValue: data.firstName,
-                lastNameValue: data.lastName,
+                usernameValue: data.username || data.firstName,
+                firstNameValue: data.username || data.firstName,
+                lastNameValue: "",
                 emailValue: email,
                 isAdminValue: data.isAdmin || false,
                 colorValue: data.color,
@@ -543,10 +575,10 @@ export default function LandingPage() {
                         {/* Create Room Modal */}
                         {modal === "create" && !success && (
                             <>
-                                <h2 className="modal-title">
+                                <h2 className="modal-title modal-title-compact">
                                     <i className="fa-solid fa-rocket" style={{ color: 'var(--accent-primary)' }} /> Create Room
                                 </h2>
-                                <p className="modal-subtitle">
+                                <p className="modal-subtitle modal-subtitle-compact">
                                     Set up your collaborative workspace with your own Room ID and password.
                                 </p>
 
@@ -554,30 +586,18 @@ export default function LandingPage() {
                                     <div className="message message-error"><i className="fa-solid fa-triangle-exclamation" /> {error}</div>
                                 )}
 
-                                <form onSubmit={handleCreateRoom}>
-                                    <div className="form-row">
-                                        <div className="form-group">
-                                            <label className="form-label">First Name</label>
-                                            <input
-                                                className="form-input"
-                                                type="text"
-                                                placeholder="John"
-                                                value={firstName}
-                                                onChange={(e) => setFirstName(e.target.value)}
-                                                required
-                                            />
-                                        </div>
-                                        <div className="form-group">
-                                            <label className="form-label">Last Name</label>
-                                            <input
-                                                className="form-input"
-                                                type="text"
-                                                placeholder="Doe"
-                                                value={lastName}
-                                                onChange={(e) => setLastName(e.target.value)}
-                                                required
-                                            />
-                                        </div>
+                                <form className="compact-create-form" onSubmit={handleCreateRoom}>
+                                    <div className="form-group">
+                                        <label className="form-label">Username</label>
+                                        <input
+                                            className="form-input"
+                                            type="text"
+                                            placeholder="john"
+                                            value={username}
+                                            onChange={(e) => setUsername(e.target.value)}
+                                            maxLength={USERNAME_MAX_LENGTH}
+                                            required
+                                        />
                                     </div>
 
                                     <div className="form-group">
@@ -617,7 +637,7 @@ export default function LandingPage() {
                                                 value={createRoomPassword}
                                                 onChange={(e) => setCreateRoomPassword(e.target.value)}
                                                 required
-                                                minLength={4}
+                                                minLength={8}
                                                 maxLength={72}
                                             />
                                             <button
@@ -640,7 +660,7 @@ export default function LandingPage() {
                                                 value={createRoomConfirmPassword}
                                                 onChange={(e) => setCreateRoomConfirmPassword(e.target.value)}
                                                 required
-                                                minLength={4}
+                                                minLength={8}
                                                 maxLength={72}
                                             />
                                             <button
@@ -720,29 +740,16 @@ export default function LandingPage() {
                                 )}
 
                                 <form onSubmit={handleJoinRoom}>
-                                    <div className="form-row">
-                                        <div className="form-group">
-                                            <label className="form-label">First Name</label>
-                                            <input
-                                                className="form-input"
-                                                type="text"
-                                                placeholder="Jane"
-                                                value={firstName}
-                                                onChange={(e) => setFirstName(e.target.value)}
-                                                required
-                                            />
-                                        </div>
-                                        <div className="form-group">
-                                            <label className="form-label">Last Name</label>
-                                            <input
-                                                className="form-input"
-                                                type="text"
-                                                placeholder="Doe"
-                                                value={lastName}
-                                                onChange={(e) => setLastName(e.target.value)}
-                                                required
-                                            />
-                                        </div>
+                                    <div className="form-group">
+                                        <label className="form-label">Username</label>
+                                        <input
+                                            className="form-input"
+                                            type="text"
+                                            placeholder="jane"
+                                            value={username}
+                                            onChange={(e) => setUsername(e.target.value)}
+                                            required
+                                        />
                                     </div>
 
                                     <div className="form-group">

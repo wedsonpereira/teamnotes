@@ -13,7 +13,7 @@ export default function ActionButtons({ onCreateRoom, onJoinRoom, onReenter }) {
             </div>
 
             <p className="landing-reenter">
-                Already have a code?{" "}
+                Already a member?{" "}
                 <a
                     href="#"
                     onClick={(e) => { e.preventDefault(); onReenter(); }}

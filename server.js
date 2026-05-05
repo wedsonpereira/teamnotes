@@ -7,6 +7,7 @@ const Y = require("yjs");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
+const zlib = require("zlib");
 
 const dev = process.env.NODE_ENV !== "production";
 const hostname = "localhost";
@@ -22,10 +23,16 @@ const prisma = new PrismaClient();
 const roomYDocs = new Map();
 const roomUsers = new Map();
 const roomCleanupTimers = new Map();
+const roomYDocLoadedFromDB = new Set();
+const roomSaveTimers = new Map();
 const nextStaticRoot = path.join(process.cwd(), ".next", "static");
+const nextStaticCssRoot = path.join(nextStaticRoot, "css");
 const nextStaticChunksRoot = path.join(nextStaticRoot, "chunks");
 const getApprovalChannel = (roomId) => `room-approval:${roomId}`;
 const ROOM_DOC_CLEANUP_DELAY_MS = 10 * 60 * 1000;
+const SOCKET_MAX_BUFFER_SIZE = 12 * 1024 * 1024;
+const YJS_SOCKET_CHUNK_BYTES = 256 * 1024;
+const ROOM_DB_SAVE_DELAY_MS = 30 * 1000;
 
 const STATIC_CONTENT_TYPES = {
     ".css": "text/css; charset=UTF-8",
@@ -44,8 +51,8 @@ const STATIC_CONTENT_TYPES = {
 
 const ROOM_SESSION_COOKIE = "teamnote_room_session";
 const DEFAULT_SESSION_SECRET = "teamnote-dev-session-secret-change-this";
-const LEGACY_HASHED_CSS_PATH = /\/([a-f0-9]{8,}\.css)$/i;
-const STALE_CSS_PATH = /^(?:chunks|css)\/[a-f0-9]{8,}\.css$/i;
+const LEGACY_CSS_PATH = /\/([^/?#]+\.css)$/i;
+const STALE_CSS_PATH = /^(?:chunks|css)\/.+\.css$/i;
 const STALE_JS_PATH =
     /^(?:chunks\/.+\.js|[^/]+\/_(?:buildManifest|ssgManifest)\.js)$/i;
 
@@ -152,6 +159,12 @@ function clearRoomYDocs(roomId) {
     for (const key of roomYDocs.keys()) {
         if (key === roomId || key.startsWith(`${roomId}:`)) {
             roomYDocs.delete(key);
+            roomYDocLoadedFromDB.delete(key);
+            const saveTimer = roomSaveTimers.get(key);
+            if (saveTimer) {
+                clearTimeout(saveTimer);
+                roomSaveTimers.delete(key);
+            }
         }
     }
 }
@@ -168,10 +181,12 @@ function scheduleRoomCleanup(roomId) {
     if (!roomId) return;
     cancelRoomCleanup(roomId);
 
-    const timer = setTimeout(() => {
+    const timer = setTimeout(async () => {
         roomCleanupTimers.delete(roomId);
         const usersMap = roomUsers.get(roomId);
         if (usersMap && usersMap.size > 0) return;
+        // Persist in-memory state to DB before clearing
+        await saveAllRoomDocsToDB(roomId);
         clearRoomYDocs(roomId);
     }, ROOM_DOC_CLEANUP_DELAY_MS);
 
@@ -217,7 +232,7 @@ async function hasApprovedRoomAccess(roomId, userId) {
     return {
         allowed: Boolean(membership),
         isAdmin: false,
-        access: membership?.access || "EDIT",
+        access: membership?.access || "VIEW",
     };
 }
 
@@ -262,6 +277,114 @@ function getOrCreateYDoc(key) {
 
 function yjsKey(roomId, pageId) {
     return pageId ? `${roomId}:${pageId}` : roomId;
+}
+
+function parseYjsKey(key) {
+    const colonIndex = key.indexOf(":");
+    if (colonIndex === -1) return { roomId: key, pageId: null };
+    return { roomId: key.substring(0, colonIndex), pageId: key.substring(colonIndex + 1) };
+}
+
+/**
+ * Load persisted content from the database into a Yjs document.
+ * Handles both encrypted (client-saved) and unencrypted content.
+ * Encrypted content will fail decompression silently — the client
+ * will load and sync it instead.
+ */
+async function ensureYDocLoadedFromDB(key, roomId, pageId) {
+    if (roomYDocLoadedFromDB.has(key)) return getOrCreateYDoc(key);
+    roomYDocLoadedFromDB.add(key);
+
+    const ydoc = getOrCreateYDoc(key);
+
+    // Skip if doc already has content from a live session
+    try {
+        if (ydoc.getXmlFragment("default").length > 0) return ydoc;
+    } catch {}
+
+    try {
+        let record = null;
+        if (pageId) {
+            record = await prisma.page.findFirst({
+                where: { id: pageId, roomId },
+                select: { compressedContent: true },
+            });
+        } else {
+            record = await prisma.room.findUnique({
+                where: { id: roomId },
+                select: { compressedContent: true },
+            });
+        }
+
+        const raw = record?.compressedContent;
+        if (raw && raw.length > 0) {
+            const decompressed = zlib.inflateSync(Buffer.from(raw));
+            Y.applyUpdate(ydoc, new Uint8Array(decompressed));
+            console.log(`[YDoc] Loaded persisted state for ${key} (${raw.length} bytes compressed)`);
+        }
+    } catch (err) {
+        // Content may be client-side encrypted — only the client can decode it.
+        // The client will load from DB via the save API and sync via socket.
+        console.warn(`[YDoc] Could not restore persisted state for ${key} (may be encrypted):`, err.message);
+    }
+
+    return ydoc;
+}
+
+/**
+ * Save the current Yjs document state to the database (unencrypted, compressed).
+ */
+async function saveYDocToDB(key, roomId, pageId) {
+    const ydoc = roomYDocs.get(key);
+    if (!ydoc) return;
+
+    try {
+        const state = Y.encodeStateAsUpdate(ydoc);
+        if (state.length <= 2) return; // Empty doc
+
+        const compressed = zlib.deflateSync(Buffer.from(state));
+
+        if (pageId) {
+            await prisma.page.updateMany({
+                where: { id: pageId, roomId },
+                data: { compressedContent: compressed },
+            });
+        } else {
+            await prisma.room.update({
+                where: { id: roomId },
+                data: { compressedContent: compressed },
+            });
+        }
+
+        console.log(`[YDoc] Saved state to DB for ${key} (${compressed.length} bytes)`);
+    } catch (err) {
+        console.error(`[YDoc] Failed to save state for ${key}:`, err);
+    }
+}
+
+function scheduleDebouncedSave(key, roomId, pageId) {
+    const existing = roomSaveTimers.get(key);
+    if (existing) clearTimeout(existing);
+
+    const timer = setTimeout(() => {
+        roomSaveTimers.delete(key);
+        saveYDocToDB(key, roomId, pageId).catch((err) => {
+            console.error(`[YDoc] Debounced save failed for ${key}:`, err);
+        });
+    }, ROOM_DB_SAVE_DELAY_MS);
+
+    roomSaveTimers.set(key, timer);
+}
+
+async function saveAllRoomDocsToDB(roomId) {
+    const promises = [];
+    for (const key of roomYDocs.keys()) {
+        if (key === roomId || key.startsWith(`${roomId}:`)) {
+            const parsed = parseYjsKey(key);
+            promises.push(saveYDocToDB(key, parsed.roomId, parsed.pageId));
+        }
+    }
+    await Promise.allSettled(promises);
 }
 
 function normalizeBinaryUpdatePayload(input) {
@@ -317,6 +440,35 @@ function normalizeBinaryUpdatePayload(input) {
     }
 
     return null;
+}
+
+function emitYjsSocketPayload(target, eventName, payload) {
+    const update = normalizeBinaryUpdatePayload(payload?.update);
+    if (!update) return;
+
+    if (update.byteLength <= YJS_SOCKET_CHUNK_BYTES) {
+        target.emit(eventName, {
+            ...payload,
+            update,
+        });
+        return;
+    }
+
+    const updateId = crypto.randomUUID();
+    const total = Math.ceil(update.byteLength / YJS_SOCKET_CHUNK_BYTES);
+    const { update: _update, ...rest } = payload;
+
+    for (let index = 0; index < total; index += 1) {
+        const start = index * YJS_SOCKET_CHUNK_BYTES;
+        const end = Math.min(start + YJS_SOCKET_CHUNK_BYTES, update.byteLength);
+        target.emit(`${eventName}-chunk`, {
+            ...rest,
+            updateId,
+            index,
+            total,
+            chunk: update.slice(start, end),
+        });
+    }
 }
 
 function contentTypeForFile(filePath) {
@@ -453,21 +605,35 @@ function sendChunkRecoveryScript(req, res, missingPathname) {
     return true;
 }
 
-async function findNewestCssChunkFile() {
+async function findNewestCssFile() {
     try {
-        const entries = await fs.promises.readdir(nextStaticChunksRoot, {
-            withFileTypes: true,
-        });
-
         let newestFile = null;
-        for (const entry of entries) {
-            if (!entry.isFile() || !entry.name.endsWith(".css")) continue;
-            const filePath = path.join(nextStaticChunksRoot, entry.name);
-            const stats = await fs.promises.stat(filePath);
-            if (!newestFile || stats.mtimeMs > newestFile.mtimeMs) {
-                newestFile = { filePath, mtimeMs: stats.mtimeMs };
+
+        async function walk(dirPath) {
+            let entries = [];
+            try {
+                entries = await fs.promises.readdir(dirPath, { withFileTypes: true });
+            } catch {
+                return;
+            }
+
+            for (const entry of entries) {
+                const entryPath = path.join(dirPath, entry.name);
+                if (entry.isDirectory()) {
+                    await walk(entryPath);
+                    continue;
+                }
+                if (!entry.isFile() || !entry.name.endsWith(".css")) continue;
+
+                const stats = await fs.promises.stat(entryPath);
+                if (!newestFile || stats.mtimeMs > newestFile.mtimeMs) {
+                    newestFile = { filePath: entryPath, mtimeMs: stats.mtimeMs };
+                }
             }
         }
+
+        await walk(nextStaticCssRoot);
+        await walk(nextStaticChunksRoot);
 
         return newestFile ? newestFile.filePath : null;
     } catch {
@@ -495,7 +661,7 @@ async function tryServeNextStatic(req, res, pathname) {
             return true;
         }
     } else {
-        const legacyCssMatch = pathname && pathname.match(LEGACY_HASHED_CSS_PATH);
+        const legacyCssMatch = pathname && pathname.match(LEGACY_CSS_PATH);
         if (!legacyCssMatch) return false;
         relativePath = `chunks/${legacyCssMatch[1]}`;
     }
@@ -529,7 +695,7 @@ async function tryServeNextStatic(req, res, pathname) {
     } catch (err) {
         if (err && err.code === "ENOENT") {
             if (STALE_CSS_PATH.test(relativePath)) {
-                const fallbackCssPath = await findNewestCssChunkFile();
+                const fallbackCssPath = await findNewestCssFile();
                 if (fallbackCssPath) {
                     console.warn(
                         `[Static] Missing CSS asset "${pathname}", serving fallback "${path.basename(fallbackCssPath)}".`
@@ -716,9 +882,11 @@ app.prepare().then(() => {
             credentials: true,
         },
         path: "/socket.io",
-        // Allow larger collaborative updates (e.g., embedded base64 files).
-        maxHttpBufferSize: 5e6, // 5 MB (reduced from 50 MB to prevent memory exhaustion)
+        // Uploaded files are embedded as data URLs inside Yjs updates.
+        // A 5 MB file expands to ~6.7 MB base64 before Yjs/Socket.IO overhead.
+        maxHttpBufferSize: SOCKET_MAX_BUFFER_SIZE,
     });
+    globalThis.__teamnoteIo = io;
 
     io.use((socket, next) => {
         socket.session = getSocketSession(socket);
@@ -727,6 +895,7 @@ app.prepare().then(() => {
 
     io.on("connection", (socket) => {
         socket.roomAuthorized = false;
+        const yjsChunkBuffers = new Map();
         console.log(`[Socket] Connected: ${socket.id}`);
 
         // Join a room
@@ -779,7 +948,7 @@ app.prepare().then(() => {
                 socket.roomId = roomId;
                 socket.roomAuthorized = true;
                 socket.session.isAdmin = roomAccess.isAdmin;
-                socket.session.access = roomAccess.access || "EDIT";
+                socket.session.access = roomAccess.access || "VIEW";
                 socket.userData = safeUser;
                 socket.pageId = normalizedPageId;
 
@@ -806,16 +975,16 @@ app.prepare().then(() => {
 
                 // Send full Yjs state for the current page
                 const key = yjsKey(roomId, normalizedPageId);
-                const ydoc = getOrCreateYDoc(key);
+                const ydoc = await ensureYDocLoadedFromDB(key, roomId, normalizedPageId);
                 const state = Y.encodeStateAsUpdate(ydoc);
                 if (state.length > 2) {
-                    socket.emit("yjs-sync", {
+                    emitYjsSocketPayload(socket, "yjs-sync", {
                         update: state,
                         pageId: normalizedPageId || null,
                     });
                 }
 
-                console.log(`[Socket] ${(safeUser && safeUser.firstName) || "User"} joined room ${roomId}${normalizedPageId ? ` page ${normalizedPageId}` : ""}`);
+                console.log(`[Socket] ${(safeUser && (safeUser.username || safeUser.firstName)) || "User"} joined room ${roomId}${normalizedPageId ? ` page ${normalizedPageId}` : ""}`);
 
                 io.to(roomId).emit("members-refresh");
             } catch (err) {
@@ -853,10 +1022,10 @@ app.prepare().then(() => {
 
                 // Send full Yjs state for the new page
                 const key = yjsKey(roomId, normalizedPageId);
-                const ydoc = getOrCreateYDoc(key);
+                const ydoc = await ensureYDocLoadedFromDB(key, roomId, normalizedPageId);
                 const state = Y.encodeStateAsUpdate(ydoc);
                 if (state.length > 2) {
-                    socket.emit("yjs-sync", {
+                    emitYjsSocketPayload(socket, "yjs-sync", {
                         update: state,
                         pageId: normalizedPageId,
                     });
@@ -865,6 +1034,32 @@ app.prepare().then(() => {
                 console.error("[Socket] switch-page failed:", err);
             }
         });
+
+        const ensureSocketPage = async (roomId, pageId) => {
+            const normalizedPageId = normalizePageId(pageId);
+            if (!normalizedPageId) return socket.pageId || null;
+            if (socket.pageId === normalizedPageId) return normalizedPageId;
+
+            const pageExists = await roomHasPage(roomId, normalizedPageId);
+            if (!pageExists) return null;
+
+            if (socket.pageId) {
+                socket.leave(`${roomId}:${socket.pageId}`);
+            }
+
+            socket.pageId = normalizedPageId;
+            socket.join(`${roomId}:${normalizedPageId}`);
+
+            if (roomUsers.has(roomId) && roomUsers.get(roomId).has(socket.id)) {
+                const userData = roomUsers.get(roomId).get(socket.id);
+                userData.pageId = normalizedPageId;
+                io.to(roomId).emit("presence-update", {
+                    users: getRoomPresenceUsers(roomId),
+                });
+            }
+
+            return normalizedPageId;
+        };
 
         // Notify all clients in a room that pages changed (created/renamed/deleted)
         socket.on("pages-changed", ({ roomId }) => {
@@ -918,15 +1113,19 @@ app.prepare().then(() => {
             }
         });
 
-        // Yjs incremental update from a client
-        socket.on("yjs-update", ({ roomId, update, user, pageId }) => {
+        const handleYjsUpdate = async ({ roomId, update, user, pageId }) => {
             if (!update || !roomId) return;
             if (!socketHasRoomAccess(socket, roomId)) return;
             if (!socket.session?.isAdmin && socket.session?.access === "VIEW") return;
 
-            const incomingPageId = normalizePageId(pageId);
-            const activePageId = socket.pageId || null;
-            if (incomingPageId !== activePageId) return;
+            let activePageId;
+            try {
+                activePageId = await ensureSocketPage(roomId, pageId);
+            } catch (err) {
+                console.warn("[Socket] Failed to resolve yjs-update page:", err);
+                return;
+            }
+            if (!activePageId) return;
 
             const uint8 = normalizeBinaryUpdatePayload(update);
             if (!uint8 || uint8.length === 0) {
@@ -947,28 +1146,96 @@ app.prepare().then(() => {
                 return;
             }
 
+            // Schedule debounced save to database
+            scheduleDebouncedSave(key, roomId, activePageId);
+
             // Broadcast to all OTHER clients on the same page
             const channel = activePageId ? `${roomId}:${activePageId}` : roomId;
-            socket.to(channel).emit("yjs-update", {
+            emitYjsSocketPayload(socket.to(channel), "yjs-update", {
                 update: uint8,
                 user: (user && user.userId === socket.session?.userId)
                     ? user
                     : (socket.userData || null),
                 pageId: activePageId,
             });
+        };
+
+        // Yjs incremental update from a client
+        socket.on("yjs-update", handleYjsUpdate);
+
+        socket.on("yjs-update-chunk", async (payload) => {
+            const updateId = String(payload?.updateId || "");
+            const index = Number(payload?.index);
+            const total = Number(payload?.total);
+            const chunk = normalizeBinaryUpdatePayload(payload?.chunk);
+
+            if (!updateId || !Number.isInteger(index) || !Number.isInteger(total)) return;
+            if (total <= 0 || total > 128 || index < 0 || index >= total) return;
+            if (!chunk || chunk.byteLength === 0) return;
+
+            const key = `${socket.id}:${updateId}`;
+            let entry = yjsChunkBuffers.get(key);
+            if (!entry) {
+                entry = {
+                    roomId: payload?.roomId,
+                    pageId: payload?.pageId || null,
+                    user: payload?.user || null,
+                    total,
+                    chunks: new Array(total),
+                    received: 0,
+                    bytes: 0,
+                    createdAt: Date.now(),
+                };
+                yjsChunkBuffers.set(key, entry);
+            }
+
+            if (entry.total !== total || entry.chunks[index]) return;
+
+            entry.chunks[index] = chunk;
+            entry.received += 1;
+            entry.bytes += chunk.byteLength;
+
+            if (entry.bytes > SOCKET_MAX_BUFFER_SIZE) {
+                yjsChunkBuffers.delete(key);
+                console.warn("[Socket] Dropped oversized chunked yjs-update.");
+                return;
+            }
+
+            if (entry.received !== entry.total) return;
+
+            yjsChunkBuffers.delete(key);
+            const merged = new Uint8Array(entry.bytes);
+            let offset = 0;
+            for (const part of entry.chunks) {
+                if (!part) return;
+                merged.set(part, offset);
+                offset += part.byteLength;
+            }
+
+            await handleYjsUpdate({
+                roomId: entry.roomId,
+                pageId: entry.pageId,
+                user: entry.user,
+                update: merged,
+            });
         });
 
         // Client requests full Yjs state (on reconnect or late join)
-        socket.on("yjs-request-state", ({ roomId, pageId }) => {
+        socket.on("yjs-request-state", async ({ roomId, pageId }) => {
             if (!socketHasRoomAccess(socket, roomId)) return;
-            const incomingPageId = normalizePageId(pageId);
-            const activePageId = socket.pageId || null;
-            if (incomingPageId !== activePageId) return;
+            let activePageId;
+            try {
+                activePageId = await ensureSocketPage(roomId, pageId);
+            } catch (err) {
+                console.warn("[Socket] Failed to resolve yjs-request-state page:", err);
+                return;
+            }
+            if (!activePageId) return;
 
             const key = yjsKey(roomId, activePageId);
-            const ydoc = getOrCreateYDoc(key);
+            const ydoc = await ensureYDocLoadedFromDB(key, roomId, activePageId);
             const state = Y.encodeStateAsUpdate(ydoc);
-            socket.emit("yjs-sync", {
+            emitYjsSocketPayload(socket, "yjs-sync", {
                 update: state,
                 pageId: activePageId,
             });
@@ -1023,7 +1290,7 @@ app.prepare().then(() => {
                 where: { roomId, userId, status: "APPROVED" },
                 select: { access: true },
             });
-            const nextAccess = membership?.access || "EDIT";
+            const nextAccess = membership?.access || "VIEW";
 
             io.to(roomId).emit("members-refresh");
 
@@ -1127,6 +1394,10 @@ app.prepare().then(() => {
                 roomUsers.get(roomId).delete(socket.id);
                 if (roomUsers.get(roomId).size === 0) {
                     roomUsers.delete(roomId);
+                    // Save all docs for this room before scheduling cleanup
+                    saveAllRoomDocsToDB(roomId).catch((err) => {
+                        console.error(`[YDoc] Save on last disconnect failed for ${roomId}:`, err);
+                    });
                     scheduleRoomCleanup(roomId);
                 } else {
                     io.to(roomId).emit("presence-update", {
@@ -1160,3 +1431,25 @@ function getRandomColor() {
     ];
     return colors[Math.floor(Math.random() * colors.length)];
 }
+
+// Graceful shutdown — persist all in-memory Yjs documents to the database.
+async function saveAllDocsBeforeShutdown() {
+    console.log("[YDoc] Saving all in-memory documents before shutdown...");
+    const promises = [];
+    for (const key of roomYDocs.keys()) {
+        const parsed = parseYjsKey(key);
+        promises.push(saveYDocToDB(key, parsed.roomId, parsed.pageId));
+    }
+    await Promise.allSettled(promises);
+    console.log("[YDoc] All documents saved.");
+}
+
+process.on("SIGTERM", async () => {
+    await saveAllDocsBeforeShutdown();
+    process.exit(0);
+});
+
+process.on("SIGINT", async () => {
+    await saveAllDocsBeforeShutdown();
+    process.exit(0);
+});

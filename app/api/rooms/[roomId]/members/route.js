@@ -7,6 +7,7 @@ import {
 } from "@/lib/session";
 import { sendRoomInviteEmail } from "@/lib/email";
 import { logError } from "@/lib/logger";
+import { emitApprovalRefresh, emitRoomMembersRefresh } from "@/lib/realtime";
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MEMBER_ACCESS_VALUES = new Set(["VIEW", "EDIT"]);
@@ -93,13 +94,14 @@ export async function GET(request, { params }) {
             .filter((m) => m.status === "APPROVED")
             .map((m) => ({
                 id: m.user.id,
+                username: m.user.firstName,
                 firstName: m.user.firstName,
-                lastName: m.user.lastName,
+                lastName: "",
                 email: m.user.email,
                 isAdmin: m.userId === room.adminId,
-                access: m.userId === room.adminId ? "EDIT" : (m.access || "EDIT"),
+                access: m.userId === room.adminId ? "EDIT" : (m.access || "VIEW"),
                 joinedAt: m.joinedAt,
-                color: m.color || colorFromName(m.user.firstName + m.user.lastName),
+                color: m.color || colorFromName(m.user.firstName),
             }));
 
         const pendingMembers = isAdmin
@@ -108,8 +110,9 @@ export async function GET(request, { params }) {
                 .map((m) => ({
                     id: m.user.id,
                     memberId: m.id,
+                    username: m.user.firstName,
                     firstName: m.user.firstName,
-                    lastName: m.user.lastName,
+                    lastName: "",
                     email: m.user.email,
                     joinedAt: m.joinedAt,
                 }))
@@ -122,7 +125,7 @@ export async function GET(request, { params }) {
             roomCode: room.roomCode,
             showMembers: room.showMembers,
             isAdmin,
-            access: isAdmin ? "EDIT" : (currentMembership?.access || "EDIT"),
+            access: isAdmin ? "EDIT" : (currentMembership?.access || "VIEW"),
             members: room.showMembers || isAdmin ? approvedMembers : [],
             pendingMembers,
             invitedEmails: isAdmin
@@ -133,7 +136,7 @@ export async function GET(request, { params }) {
                 }))
                 : [],
             adminName: adminMember
-                ? `${adminMember.firstName} ${adminMember.lastName}`
+                ? adminMember.username
                 : "Unknown",
         });
     } catch (error) {
@@ -228,7 +231,7 @@ export async function POST(request, { params }) {
                 data: {
                     email: normalizedEmail,
                     firstName: derivedFirstName,
-                    lastName: derivedLastName,
+                    lastName: "",
                 },
                 select: {
                     id: true,
@@ -266,6 +269,7 @@ export async function POST(request, { params }) {
                     where: { id: existingMember.id },
                     data: {
                         status: "APPROVED",
+                        access: "VIEW",
                         color: existingMember.color || pickMemberColor(approvedCount),
                     },
                 });
@@ -281,13 +285,14 @@ export async function POST(request, { params }) {
                     roomId,
                     userId: invitedUser.id,
                     status: "APPROVED",
+                    access: "VIEW",
                     color: pickMemberColor(approvedCount),
                 },
             });
             accessGrantedNow = true;
         }
 
-        const inviterName = `${room.admin.firstName || ""} ${room.admin.lastName || ""}`.trim()
+        const inviterName = room.admin.firstName
             || room.admin.email
             || "A teammate";
         const appUrl = (process.env.APP_URL || "http://localhost:3001").replace(/\/$/, "");
@@ -391,6 +396,8 @@ export async function DELETE(request, { params }) {
         }
 
         await prisma.roomMember.delete({ where: { id: member.id } });
+        emitRoomMembersRefresh(roomId);
+        emitApprovalRefresh(roomId);
 
         // Clear the room session cookie
         const response = NextResponse.json({ message: "You have exited the room." });
@@ -462,6 +469,7 @@ export async function PATCH(request, { params }) {
                 );
             }
 
+            emitRoomMembersRefresh(roomId);
             return NextResponse.json({
                 message: access === "VIEW" ? "Member set to view only." : "Member can edit.",
                 access,
@@ -511,6 +519,8 @@ export async function PATCH(request, { params }) {
                 },
             });
 
+            emitRoomMembersRefresh(roomId);
+            emitApprovalRefresh(roomId);
             return NextResponse.json({
                 message:
                     revokedInvites.count > 0
@@ -519,8 +529,9 @@ export async function PATCH(request, { params }) {
                 inviteRevoked: revokedInvites.count > 0,
                 member: {
                     id: existingMember.user.id,
+                    username: existingMember.user.firstName,
                     firstName: existingMember.user.firstName,
-                    lastName: existingMember.user.lastName,
+                    lastName: "",
                     email: existingMember.user.email,
                 },
             });
@@ -551,16 +562,21 @@ export async function PATCH(request, { params }) {
 
         const member = await prisma.roomMember.update({
             where: { id: memberId },
-            data: { status: action },
+            data: action === "APPROVED"
+                ? { status: action, access: "VIEW" }
+                : { status: action },
             include: { user: true },
         });
 
+        emitRoomMembersRefresh(roomId);
+        emitApprovalRefresh(roomId);
         return NextResponse.json({
             message: `Member ${action.toLowerCase()}.`,
             member: {
                 id: member.user.id,
+                username: member.user.firstName,
                 firstName: member.user.firstName,
-                lastName: member.user.lastName,
+                lastName: "",
                 email: member.user.email,
             },
         });

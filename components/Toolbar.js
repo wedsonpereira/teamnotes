@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback, useLayoutEffect } from "react";
 import ReactDOM from "react-dom";
+import { isImageFile, readFileAsDataUrl, readImageAsRenderableDataUrl } from "@/lib/clientUploads";
 
 const BG_COLORS = [
     { name: "Default", value: null },
@@ -105,6 +106,7 @@ const CASHFREE_SDK_SRC = "https://sdk.cashfree.com/js/v3/cashfree.js";
 
 const TOOLTIP_DESCRIPTIONS = {
     "Delete Table": "Remove the selected table from the page.",
+    "Delete Image": "Remove the selected image from the page.",
     "Font Family": "Choose the typeface for selected text.",
     "Font Size": "Change the size of selected text.",
     "Heading 1": "Make selected text a large section title.",
@@ -331,15 +333,6 @@ function PortalTooltip({ tip, anchorRef, visible }) {
     );
 }
 
-function readFileAsDataUrl(file) {
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(String(reader.result || ""));
-        reader.onerror = () => reject(new Error("Failed to read file."));
-        reader.readAsDataURL(file);
-    });
-}
-
 function normalizeFontSize(value) {
     if (!value) return "default";
     const parsed = String(value).replace("px", "").trim();
@@ -387,6 +380,64 @@ function getInsertPosAfterSelectedMediaNode(editorInstance) {
     return selection.to;
 }
 
+function normalizeOwnerName(value) {
+    return String(value || "").trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function canCurrentUserModifyNode(node, userId, userName, isAdmin) {
+    if (isAdmin) return true;
+    const attrs = node?.attrs || {};
+    if (attrs.addedById) return attrs.addedById === userId;
+    if (attrs.addedBy) {
+        return normalizeOwnerName(attrs.addedBy) === normalizeOwnerName(userName);
+    }
+    return true;
+}
+
+function rangeContainsProtectedContent(doc, from, to, userId, userName, isAdmin) {
+    if (isAdmin || !doc) return false;
+
+    let protectedContent = false;
+    doc.nodesBetween(from, to, (node) => {
+        if (protectedContent) return false;
+
+        if (
+            (node.type?.name === "image" || node.type?.name === "fileAttachment") &&
+            !canCurrentUserModifyNode(node, userId, userName, false)
+        ) {
+            protectedContent = true;
+            return false;
+        }
+
+        if (node.isText) {
+            const otherAuthorMark = node.marks?.find((mark) => (
+                mark.type?.name === "authorHighlight" &&
+                mark.attrs?.name &&
+                normalizeOwnerName(mark.attrs.name) !== normalizeOwnerName(userName)
+            ));
+            if (otherAuthorMark) {
+                protectedContent = true;
+                return false;
+            }
+        }
+
+        return true;
+    });
+
+    return protectedContent;
+}
+
+function getSelectedImageRange(editorInstance, userId, userName, isAdmin) {
+    const selection = editorInstance?.state?.selection;
+    const selectedNode = selection?.node;
+    if (selectedNode?.type?.name !== "image") return null;
+    if (!canCurrentUserModifyNode(selectedNode, userId, userName, isAdmin)) {
+        return null;
+    }
+
+    return { from: selection.from, to: selection.to };
+}
+
 export default function Toolbar({
     roomName,
     saveStatus,
@@ -400,8 +451,10 @@ export default function Toolbar({
     showLineNumbers = false,
     onChangeShowLineNumbers,
     typingUsers = [],
+    userId,
     userName,
     userColor,
+    isAdmin = false,
     accentPrimary,
     accentSecondary,
     onChangeAccentPrimary,
@@ -436,6 +489,7 @@ export default function Toolbar({
     const [showFloatingPlacementPicker, setShowFloatingPlacementPicker] = useState(false);
     const [floatingPlacementPosition, setFloatingPlacementPosition] = useState({ top: 0, left: 0 });
     const [hoveredFloatingPlacement, setHoveredFloatingPlacement] = useState(null);
+    const [activeImageRange, setActiveImageRange] = useState(null);
     const [showTablePicker, setShowTablePicker] = useState(false);
     const [tablePosition, setTablePosition] = useState({ top: 0, left: 0 });
     const [tableRows, setTableRows] = useState(3);
@@ -697,11 +751,13 @@ export default function Toolbar({
             setActiveParagraphLineSpacing("default");
             setParagraphNoSpaceAfter(false);
             setActiveTableRange(null);
+            setActiveImageRange(null);
             return;
         }
 
         const syncTypography = () => {
             setActiveTableRange(getActiveTableRange(editor));
+            setActiveImageRange(getSelectedImageRange(editor, userId, userName, isAdmin));
             const attrs = editor.getAttributes("textStyle") || {};
             const knownFont = TEXT_FONT_OPTIONS.some(
                 (option) => option.value === attrs.fontFamily
@@ -745,7 +801,7 @@ export default function Toolbar({
             editor.off("selectionUpdate", syncTypography);
             editor.off("transaction", syncTypography);
         };
-    }, [editor, getActiveTableRange]);
+    }, [editor, getActiveTableRange, isAdmin, userId, userName]);
 
     const btn = useCallback(
         (iconClass, command, isActive, tip) => (
@@ -770,7 +826,7 @@ export default function Toolbar({
         fileInputRef.current?.click();
     };
 
-    const shouldUseCompactToolbar = isCompactToolbar && !isMobileToolbar;
+    const shouldUseCompactToolbar = false;
 
     const openEmojiPickerFromAnchor = (anchorElement) => {
         if (!anchorElement) return;
@@ -991,6 +1047,18 @@ export default function Toolbar({
         if (!editor) return;
         const tableRange = getActiveTableRange(editor);
         if (!tableRange) return;
+        if (
+            rangeContainsProtectedContent(
+                editor.state.doc,
+                tableRange.from,
+                tableRange.to,
+                userId,
+                userName,
+                isAdmin
+            )
+        ) {
+            return;
+        }
 
         editor
             .chain()
@@ -998,6 +1066,21 @@ export default function Toolbar({
             .deleteRange(tableRange)
             .run();
         setActiveTableRange(null);
+    };
+
+    const deleteActiveImage = () => {
+        if (!editor) return;
+        const imageRange =
+            getSelectedImageRange(editor, userId, userName, isAdmin) ||
+            activeImageRange;
+        if (!imageRange) return;
+
+        editor
+            .chain()
+            .focus()
+            .deleteRange(imageRange)
+            .run();
+        setActiveImageRange(null);
     };
 
     const applyFontFamily = (fontFamilyValue) => {
@@ -1252,6 +1335,7 @@ export default function Toolbar({
     };
 
     const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5 MB
+    const MAX_INLINE_IMAGE_SIZE = 2 * 1024 * 1024;
 
     const handleImageFiles = async (event) => {
         const files = Array.from(event.target.files || []);
@@ -1262,20 +1346,26 @@ export default function Toolbar({
         const contentToInsert = [];
 
         for (const file of files) {
-            if (!file.type?.startsWith("image/")) continue;
+            if (!isImageFile(file)) continue;
             if (file.size > MAX_FILE_SIZE) {
                 alert(`Image "${file.name}" exceeds the 5 MB limit.`);
                 continue;
             }
 
             try {
-                const src = await readFileAsDataUrl(file);
+                const src = await readImageAsRenderableDataUrl(file, {
+                    maxBytes: MAX_INLINE_IMAGE_SIZE,
+                });
                 if (src) {
                     contentToInsert.push({
                         type: "image",
                         attrs: {
                             src,
                             width: DEFAULT_IMAGE_INSERT_WIDTH,
+                            addedById: userId || null,
+                            addedBy: userName || null,
+                            addedByColor: userColor || null,
+                            addedAt: new Date().toISOString(),
                         },
                     });
                 }
@@ -1308,18 +1398,27 @@ export default function Toolbar({
             }
 
             try {
-                const src = await readFileAsDataUrl(file);
-                if (!src) continue;
+                if (isImageFile(file)) {
+                    const src = await readImageAsRenderableDataUrl(file, {
+                        maxBytes: MAX_INLINE_IMAGE_SIZE,
+                    });
+                    if (!src) continue;
 
-                if (file.type?.startsWith("image/")) {
                     contentToInsert.push({
                         type: "image",
                         attrs: {
                             src,
                             width: DEFAULT_IMAGE_INSERT_WIDTH,
+                            addedById: userId || null,
+                            addedBy: userName || null,
+                            addedByColor: userColor || null,
+                            addedAt: new Date().toISOString(),
                         },
                     });
                 } else {
+                    const src = await readFileAsDataUrl(file);
+                    if (!src) continue;
+
                     contentToInsert.push({
                         type: "fileAttachment",
                         attrs: {
@@ -1327,6 +1426,7 @@ export default function Toolbar({
                             fileName: file.name,
                             fileSize: file.size,
                             mimeType: file.type,
+                            addedById: userId || null,
                             addedBy: userName || null,
                             addedByColor: userColor || null,
                             addedAt: new Date().toISOString(),
@@ -1366,6 +1466,23 @@ export default function Toolbar({
                                 onClick={deleteActiveTable}
                             >
                                 <i className="fa-solid fa-table-cells-large" />
+                            </TipBtn>
+                        </div>
+
+                        <div className="toolbar-divider" />
+                    </>
+                )}
+
+                {activeImageRange && (
+                    <>
+                        <div className="toolbar-group">
+                            <TipBtn
+                                tip="Delete Image"
+                                className="toolbar-btn danger"
+                                onMouseDown={saveEditorSelection}
+                                onClick={deleteActiveImage}
+                            >
+                                <i className="fa-solid fa-trash-can" />
                             </TipBtn>
                         </div>
 

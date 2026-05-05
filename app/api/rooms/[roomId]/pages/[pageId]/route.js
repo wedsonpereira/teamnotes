@@ -17,7 +17,7 @@ async function getRoomAccess(roomId, userId) {
     });
     return {
         allowed: Boolean(member),
-        canEdit: member?.access !== "VIEW",
+        canEdit: member?.access === "EDIT",
     };
 }
 

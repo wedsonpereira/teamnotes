@@ -27,7 +27,7 @@ export async function GET(request, { params }) {
             valid: true,
             roomCode: room.roomCode,
             roomName: room.name,
-            adminName: `${room.admin.firstName} ${room.admin.lastName}`,
+            adminName: room.admin.firstName || room.admin.email,
         });
     } catch (error) {
         logError("Token validation", error);
