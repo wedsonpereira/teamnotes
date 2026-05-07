@@ -381,6 +381,26 @@ function rangeContainsProtectedContent(doc, from, to, { userId, userName, isAdmi
     return protectedContent;
 }
 
+function getModifiedDeletionDistance(doc, from, to, backwards = false) {
+    const text = doc.textBetween(from, to, "\n", " ");
+    const chars = backwards ? Array.from(text).reverse() : Array.from(text);
+    let consumed = 0;
+    let foundWordChar = false;
+
+    for (const char of chars) {
+        consumed += char.length;
+
+        if (/\s/.test(char)) {
+            if (foundWordChar) break;
+            continue;
+        }
+
+        foundWordChar = true;
+    }
+
+    return Math.max(consumed, 1);
+}
+
 function getProtectedDeletionRange(state, event) {
     const selection = state.selection;
     if (!selection) return null;
@@ -389,17 +409,36 @@ function getProtectedDeletionRange(state, event) {
         return { from: selection.from, to: selection.to };
     }
 
+    const hasModifierKey = event.ctrlKey || event.metaKey || event.altKey;
+    const modifiedDeleteLimit = 128;
+
     if (event.key === "Backspace") {
+        const minFrom = Math.max(
+            0,
+            selection.from - (hasModifierKey ? modifiedDeleteLimit : 1)
+        );
+        const distance = hasModifierKey
+            ? getModifiedDeletionDistance(state.doc, minFrom, selection.from, true)
+            : 1;
+
         return {
-            from: Math.max(0, selection.from - 1),
+            from: Math.max(0, selection.from - distance),
             to: selection.from,
         };
     }
 
     if (event.key === "Delete") {
+        const maxTo = Math.min(
+            state.doc.content.size,
+            selection.from + (hasModifierKey ? modifiedDeleteLimit : 1)
+        );
+        const distance = hasModifierKey
+            ? getModifiedDeletionDistance(state.doc, selection.from, maxTo)
+            : 1;
+
         return {
             from: selection.from,
-            to: Math.min(state.doc.content.size, selection.from + 1),
+            to: Math.min(state.doc.content.size, selection.from + distance),
         };
     }
 
@@ -1591,11 +1630,7 @@ export default function Editor({
                     isAdmin: isAdminRef.current,
                 };
 
-                if (
-                    !isAdminRef.current &&
-                    (isBackspace || isDelete) &&
-                    !hasModifierKey
-                ) {
+                if (!isAdminRef.current && (isBackspace || isDelete)) {
                     const protectedRange = getProtectedDeletionRange(
                         view.state,
                         event

@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
-import { colorFromName, pickMemberColor } from "@/lib/colors";
+import { colorFromName } from "@/lib/colors";
 import {
     readRoomSessionFromRequest,
     createRoomInviteToken,
@@ -148,7 +148,7 @@ export async function GET(request, { params }) {
     }
 }
 
-// POST /api/rooms/[roomId]/members — Admin invite by email (auto-approve)
+// POST /api/rooms/[roomId]/members — Admin invite by email.
 export async function POST(request, { params }) {
     try {
         const { roomId } = await params;
@@ -194,8 +194,7 @@ export async function POST(request, { params }) {
             return NextResponse.json({ error: "Unauthorized." }, { status: 403 });
         }
 
-        const { firstName: derivedFirstName, lastName: derivedLastName } =
-            deriveNameFromEmail(normalizedEmail);
+        const { firstName: derivedFirstName } = deriveNameFromEmail(normalizedEmail);
 
         const invite = await prisma.roomInvite.upsert({
             where: {
@@ -240,8 +239,8 @@ export async function POST(request, { params }) {
                 },
             });
 
-        let accessGrantedNow = false;
         let alreadyApproved = false;
+        let alreadyPending = false;
 
         const existingMember = await prisma.roomMember.findUnique({
             where: {
@@ -260,36 +259,9 @@ export async function POST(request, { params }) {
         if (existingMember) {
             if (existingMember.status === "APPROVED") {
                 alreadyApproved = true;
-            } else {
-                const approvedCount = await prisma.roomMember.count({
-                    where: { roomId, status: "APPROVED" },
-                });
-
-                await prisma.roomMember.update({
-                    where: { id: existingMember.id },
-                    data: {
-                        status: "APPROVED",
-                        access: "VIEW",
-                        color: existingMember.color || pickMemberColor(approvedCount),
-                    },
-                });
-                accessGrantedNow = true;
+            } else if (existingMember.status === "PENDING") {
+                alreadyPending = true;
             }
-        } else {
-            const approvedCount = await prisma.roomMember.count({
-                where: { roomId, status: "APPROVED" },
-            });
-
-            await prisma.roomMember.create({
-                data: {
-                    roomId,
-                    userId: invitedUser.id,
-                    status: "APPROVED",
-                    access: "VIEW",
-                    color: pickMemberColor(approvedCount),
-                },
-            });
-            accessGrantedNow = true;
         }
 
         const inviterName = room.admin.firstName
@@ -322,8 +294,9 @@ export async function POST(request, { params }) {
                         email: invite.email,
                         createdAt: invite.createdAt,
                     },
-                    accessGrantedNow,
+                    requestRequired: !alreadyApproved,
                     alreadyApproved,
+                    alreadyPending,
                     emailSent: false,
                 },
                 { status: 502 }
@@ -332,9 +305,9 @@ export async function POST(request, { params }) {
 
         const message = alreadyApproved
             ? "This teammate already has room access. Invite email sent."
-            : accessGrantedNow
-                ? "Teammate invited, approved, and email sent."
-                : "Invite saved. Access will be granted automatically when they join. Email sent.";
+            : alreadyPending
+                ? "This teammate already has a pending join request. Invite email sent."
+                : "Invite email sent. The teammate must request to join before access is granted.";
 
         return NextResponse.json({
             message,
@@ -343,8 +316,9 @@ export async function POST(request, { params }) {
                 email: invite.email,
                 createdAt: invite.createdAt,
             },
-            accessGrantedNow,
+            requestRequired: !alreadyApproved,
             alreadyApproved,
+            alreadyPending,
             emailSent: true,
         });
     } catch (error) {

@@ -55,27 +55,36 @@ function approvedResponse({ room, user, status, color, message }) {
     return response;
 }
 
-async function approveMember({ member, room, user, message }) {
-    const approvedCount = await prisma.roomMember.count({
-        where: { roomId: room.id, status: "APPROVED" },
-    });
-    const approvedMember = await prisma.roomMember.update({
-        where: { id: member.id },
-        data: {
-            status: "APPROVED",
-            access: "VIEW",
-            color: member.color || pickMemberColor(approvedCount),
-        },
+function pendingResponse({ room, user, membership, message }) {
+    const session = createRoomSession({
+        userId: user.id,
+        roomId: room.id,
+        isAdmin: false,
     });
 
-    emitRoomMembersRefresh(room.id);
-
-    return approvedResponse({
-        room,
-        user,
-        status: approvedMember.status,
-        color: approvedMember.color,
+    const response = NextResponse.json({
+        roomId: room.id,
+        userId: user.id,
+        status: membership.status,
+        isAdmin: room.adminId === user.id,
+        color: membership.color,
+        username: user.firstName,
         message,
+        sessionExpiresAt: session.expiresAtIso,
+    });
+
+    setRoomSessionCookie(response, session.token);
+    return response;
+}
+
+function emitPendingJoinRequest(room, membership, user) {
+    emitRoomMembersRefresh(room.id);
+    emitJoinRequestNotification(room.id, {
+        memberId: membership.id,
+        userId: user.id,
+        username: user.firstName,
+        email: user.email,
+        requestedAt: new Date().toISOString(),
     });
 }
 
@@ -175,37 +184,27 @@ export async function POST(request) {
             }
 
             if (existingMemberByEmail.status === "REJECTED") {
-                if (isInvited) {
-                    return approveMember({
-                        member: existingMemberByEmail,
-                        room,
-                        user: memberUser,
-                        message: "You were invited by the room admin and have been approved.",
-                    });
-                }
+                const membership = await prisma.roomMember.update({
+                    where: { id: existingMemberByEmail.id },
+                    data: {
+                        status: "PENDING",
+                        access: "VIEW",
+                    },
+                });
 
-                return NextResponse.json(
-                    { error: "Your join request was rejected by the admin." },
-                    { status: 403 }
-                );
-            }
-
-            if (isInvited && existingMemberByEmail.status === "PENDING") {
-                return approveMember({
-                    member: existingMemberByEmail,
+                emitPendingJoinRequest(room, membership, memberUser);
+                return pendingResponse({
                     room,
                     user: memberUser,
-                    message: "Your invite was found. Access granted.",
+                    membership,
+                    message: "Join request sent. Waiting for admin approval.",
                 });
             }
 
-            return NextResponse.json({
-                roomId: room.id,
-                userId: memberUser.id,
-                status: existingMemberByEmail.status,
-                isAdmin: room.adminId === memberUser.id,
-                color: existingMemberByEmail.color,
-                username: memberUser.firstName,
+            return pendingResponse({
+                room,
+                user: memberUser,
+                membership: existingMemberByEmail,
                 message: "Your request is still pending approval.",
             });
         }
@@ -266,29 +265,6 @@ export async function POST(request) {
             });
         }
 
-        if (isInvited) {
-            const approvedCount = await prisma.roomMember.count({
-                where: { roomId: room.id, status: "APPROVED" },
-            });
-            const membership = await prisma.roomMember.create({
-                data: {
-                    userId: user.id,
-                    roomId: room.id,
-                    status: "APPROVED",
-                    access: "VIEW",
-                    color: pickMemberColor(approvedCount),
-                },
-            });
-
-            return approvedResponse({
-                room,
-                user,
-                status: membership.status,
-                color: membership.color,
-                message: "Invitation matched. You now have access to this room.",
-            });
-        }
-
         // Create membership request
         const existingCount = await prisma.roomMember.count({
             where: { roomId: room.id, status: "APPROVED" },
@@ -303,32 +279,13 @@ export async function POST(request) {
             },
         });
 
-        const session = createRoomSession({
-            userId: user.id,
-            roomId: room.id,
-            isAdmin: false,
-        });
-
-        const response = NextResponse.json({
-            roomId: room.id,
-            userId: user.id,
-            status: membership.status,
-            isAdmin: room.adminId === user.id,
-            color: membership.color,
-            username: user.firstName,
+        emitPendingJoinRequest(room, membership, user);
+        return pendingResponse({
+            room,
+            user,
+            membership,
             message: "Join request sent. Waiting for admin approval.",
-            sessionExpiresAt: session.expiresAtIso,
         });
-        setRoomSessionCookie(response, session.token);
-        emitRoomMembersRefresh(room.id);
-        emitJoinRequestNotification(room.id, {
-            memberId: membership.id,
-            userId: user.id,
-            username: user.firstName,
-            email: user.email,
-            requestedAt: new Date().toISOString(),
-        });
-        return response;
     } catch (error) {
         logError("Join room", error);
         return NextResponse.json(

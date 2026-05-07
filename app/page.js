@@ -150,6 +150,26 @@ export default function LandingPage() {
                     return;
                 }
 
+                if (data.status === "PENDING" || data.pending) {
+                    setAcceptingInvite(false);
+                    setModal("join");
+                    setSuccess({
+                        pending: true,
+                        message: data.message || "Join request sent. Waiting for admin approval.",
+                        roomId: data.roomId,
+                        roomCode: data.roomCode || "",
+                        userId: data.userId,
+                        username: data.username || data.firstName,
+                        firstName: data.firstName || data.username,
+                        email: data.email,
+                        roomKey: null,
+                        color: data.color,
+                        inviteToken,
+                        sessionExpiresAt: data.sessionExpiresAt,
+                    });
+                    return;
+                }
+
                 persistSessionAndEnter({
                     userId: data.userId,
                     roomId: data.roomId,
@@ -352,27 +372,43 @@ export default function LandingPage() {
                     return;
                 }
 
-                const reenterRes = await fetch("/api/rooms/reenter", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                        email: success.email,
-                        roomCode: success.roomCode,
-                        roomKey: success.roomKey,
-                    }),
-                });
+                let reenterData;
+                if (success.inviteToken) {
+                    const inviteRes = await fetch("/api/rooms/invite/accept", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ token: success.inviteToken }),
+                    });
 
-                const reenterData = await reenterRes.json();
-                if (!reenterRes.ok) {
-                    setSuccess(null);
-                    setError(reenterData.error || "Failed to enter room after approval.");
-                    return;
+                    reenterData = await inviteRes.json();
+                    if (!inviteRes.ok || reenterData.status !== "APPROVED") {
+                        setSuccess(null);
+                        setError(reenterData.error || "Failed to enter room after approval.");
+                        return;
+                    }
+                } else {
+                    const reenterRes = await fetch("/api/rooms/reenter", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            email: success.email,
+                            roomCode: success.roomCode,
+                            roomKey: success.roomKey,
+                        }),
+                    });
+
+                    reenterData = await reenterRes.json();
+                    if (!reenterRes.ok) {
+                        setSuccess(null);
+                        setError(reenterData.error || "Failed to enter room after approval.");
+                        return;
+                    }
                 }
 
                 persistSessionAndEnter({
                     userId: reenterData.userId,
                     roomId: reenterData.roomId,
-                    roomKeyValue: success.roomKey,
+                    roomKeyValue: success.roomKey || null,
                     usernameValue: reenterData.username || success.username || reenterData.firstName || success.firstName,
                     firstNameValue: reenterData.username || success.username || reenterData.firstName || success.firstName,
                     lastNameValue: "",

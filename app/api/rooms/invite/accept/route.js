@@ -7,6 +7,7 @@ import {
     setRoomSessionCookie,
 } from "@/lib/session";
 import { logError } from "@/lib/logger";
+import { emitJoinRequestNotification, emitRoomMembersRefresh } from "@/lib/realtime";
 
 function normalizeEmail(value) {
     return String(value || "").trim().toLowerCase();
@@ -49,6 +50,7 @@ export async function POST(request) {
             where: { id: decoded.roomId },
             select: {
                 id: true,
+                roomCode: true,
                 adminId: true,
                 invites: {
                     where: { email: decoded.email },
@@ -116,38 +118,48 @@ export async function POST(request) {
         });
 
         let finalColor = membership?.color || null;
+        let finalMembership = membership;
+        let shouldNotifyAdmins = false;
 
         if (membership) {
-            if (membership.status !== "APPROVED") {
-                const approvedCount = await prisma.roomMember.count({
-                    where: { roomId: room.id, status: "APPROVED" },
-                });
-
-                const updatedMembership = await prisma.roomMember.update({
+            if (membership.status === "REJECTED") {
+                finalMembership = await prisma.roomMember.update({
                     where: { id: membership.id },
                     data: {
-                        status: "APPROVED",
+                        status: "PENDING",
                         access: "VIEW",
-                        color: membership.color || pickMemberColor(approvedCount),
                     },
                 });
-                finalColor = updatedMembership.color;
+                finalColor = finalMembership.color;
+                shouldNotifyAdmins = true;
             }
         } else {
             const approvedCount = await prisma.roomMember.count({
                 where: { roomId: room.id, status: "APPROVED" },
             });
 
-            const createdMembership = await prisma.roomMember.create({
+            finalMembership = await prisma.roomMember.create({
                 data: {
                     roomId: room.id,
                     userId: user.id,
-                    status: "APPROVED",
+                    status: "PENDING",
                     access: "VIEW",
                     color: pickMemberColor(approvedCount),
                 },
             });
-            finalColor = createdMembership.color;
+            finalColor = finalMembership.color;
+            shouldNotifyAdmins = true;
+        }
+
+        if (shouldNotifyAdmins && finalMembership) {
+            emitRoomMembersRefresh(room.id);
+            emitJoinRequestNotification(room.id, {
+                memberId: finalMembership.id,
+                userId: user.id,
+                username: user.firstName || derivedName.firstName,
+                email: user.email,
+                requestedAt: new Date().toISOString(),
+            });
         }
 
         const session = createRoomSession({
@@ -158,7 +170,10 @@ export async function POST(request) {
 
         const response = NextResponse.json({
             roomId: room.id,
+            roomCode: room.roomCode,
             userId: user.id,
+            status: finalMembership?.status || "PENDING",
+            pending: finalMembership?.status !== "APPROVED",
             username: user.firstName || derivedName.firstName,
             firstName: user.firstName || derivedName.firstName,
             lastName: "",
@@ -167,6 +182,9 @@ export async function POST(request) {
             color:
                 finalColor
                 || colorFromName(user.firstName || derivedName.firstName),
+            message: finalMembership?.status === "APPROVED"
+                ? "Your membership is approved. Entering room."
+                : "Join request sent. Waiting for admin approval.",
             sessionExpiresAt: session.expiresAtIso,
         });
         setRoomSessionCookie(response, session.token);
