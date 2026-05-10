@@ -18,7 +18,7 @@ export default function ActionButtons({ onCreateRoom, onJoinRoom, onReenter }) {
                     href="#"
                     onClick={(e) => { e.preventDefault(); onReenter(); }}
                 >
-                    Join Existing Room <i className="fa-solid fa-arrow-right" />
+                    Rejoin Room <i className="fa-solid fa-arrow-right" />
                 </a>
             </p>
         </>

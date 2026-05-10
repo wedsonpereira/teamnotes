@@ -11,7 +11,7 @@ const zlib = require("zlib");
 
 const dev = process.env.NODE_ENV !== "production";
 const hostname = "localhost";
-const port = parseInt(process.env.PORT || "3001", 10);
+const port = parseInt(process.env.PORT || "3000", 10);
 
 // Force webpack in development for stability. Turbopack's persisted dev cache
 // has been panicking in this environment, while production remains unchanged.
@@ -300,7 +300,7 @@ async function ensureYDocLoadedFromDB(key, roomId, pageId) {
     // Skip if doc already has content from a live session
     try {
         if (ydoc.getXmlFragment("default").length > 0) return ydoc;
-    } catch {}
+    } catch { }
 
     try {
         let record = null;

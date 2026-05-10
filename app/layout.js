@@ -3,7 +3,7 @@ import "./globals.css";
 export const metadata = {
     title: "TeamNotes — Collaborative Text Editor",
     description:
-        "Real-time collaborative text editor with room-based access. Create or join rooms to edit documents together.",
+        "TeamNotes is a free, real-time collaborative editor with end-to-end encryption. Create private rooms, invite your team, and write together with AES-256-GCM encryption — the server never sees your content.",
 };
 
 export default function RootLayout({ children }) {

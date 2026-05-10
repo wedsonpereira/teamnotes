@@ -9,8 +9,10 @@ const nextConfig = {
   turbopack: {
     root: __dirname,
   },
-  serverActions: {
-    bodySizeLimit: "10mb",
+  experimental: {
+    serverActions: {
+      bodySizeLimit: "10mb",
+    },
   },
 };
 

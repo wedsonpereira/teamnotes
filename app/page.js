@@ -8,6 +8,13 @@ import HeroTitle from "@/components/landing/HeroTitle";
 import ActionButtons from "@/components/landing/ActionButtons";
 import ThemeToggle from "@/components/landing/ThemeToggle";
 import { saveClientSession, readClientSession } from "@/lib/clientSession";
+import Hero from "@/components/landing/Hero";
+import SecurityHighlights from "@/components/landing/SecurityHighlights";
+import Comparison from "@/components/landing/Comparison";
+import FAQ from "@/components/landing/FAQ";
+import HowItWorks from "@/components/landing/HowItWorks";
+import UseCases from "@/components/landing/UseCases";
+import Footer from "@/components/landing/Footer";
 
 const PENDING_APPROVAL_POLL_MS = 5000;
 const USERNAME_MAX_LENGTH = 48;
@@ -588,20 +595,26 @@ export default function LandingPage() {
     return (
         <>
             <div className="landing-bg" />
-            <ThemeToggle theme={theme} onToggle={toggleTheme} />
 
             <div className="landing-container">
-                <Badge />
-                <HeroTitle />
-                <ActionButtons
+                <Hero
+                    theme={theme}
+                    onToggleTheme={toggleTheme}
                     onCreateRoom={() => openModal("create")}
                     onJoinRoom={() => openModal("join")}
                     onReenter={() => openModal("reenter")}
                 />
+                <SecurityHighlights />
+                <HowItWorks />
+                <UseCases />
+                <Comparison />
+                <FAQ />
             </div>
 
+            <Footer onOpenModal={(type) => openModal(type)} />
+
             {/* Modal */}
-            {modal && (
+            {modal && modal !== "privacy" && modal !== "terms" && (
                 <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && closeModal()}>
                     <div className="modal-content">
                         <button className="modal-close" onClick={closeModal}>
@@ -1106,6 +1119,46 @@ export default function LandingPage() {
                                 </button>
                             </div>
                         )}
+                    </div>
+                </div>
+            )}
+
+            {/* Privacy Policy Modal */}
+            {modal === "privacy" && (
+                <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && closeModal()}>
+                    <div className="modal-content modal-content-large">
+                        <button className="modal-close" onClick={closeModal}><i className="fa-solid fa-xmark" /></button>
+                        <h2 className="modal-title" style={{ textAlign: 'left' }}><i className="fa-solid fa-shield-halved" style={{ color: 'var(--accent-primary)' }} /> Privacy Policy</h2>
+                        <div className="legal-content" style={{ marginTop: '2rem', textAlign: 'left', lineHeight: '1.6', color: 'var(--text-secondary)' }}>
+                            <h3 style={{ color: 'var(--landing-title)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>1. Information We Collect</h3>
+                            <p>We do not collect or store any of your document content in plaintext. All text is encrypted locally using AES-256-GCM before reaching our servers. We only store encrypted blobs.</p>
+                            
+                            <h3 style={{ color: 'var(--landing-title)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>2. Analytics and Telemetry</h3>
+                            <p>We collect minimal, anonymized telemetry to improve server performance. We do not track individual typing patterns or document topics.</p>
+                            
+                            <h3 style={{ color: 'var(--landing-title)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>3. Data Retention</h3>
+                            <p>Your encrypted documents remain on our servers as long as the room is active. Rooms inactive for an extended period may be purged in accordance with our terms.</p>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Terms and Conditions Modal */}
+            {modal === "terms" && (
+                <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && closeModal()}>
+                    <div className="modal-content modal-content-large">
+                        <button className="modal-close" onClick={closeModal}><i className="fa-solid fa-xmark" /></button>
+                        <h2 className="modal-title" style={{ textAlign: 'left' }}><i className="fa-solid fa-file-contract" style={{ color: 'var(--accent-primary)' }} />{" Terms & Conditions"}</h2>
+                        <div className="legal-content" style={{ marginTop: '2rem', textAlign: 'left', lineHeight: '1.6', color: 'var(--text-secondary)' }}>
+                            <h3 style={{ color: 'var(--landing-title)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>1. Acceptance of Terms</h3>
+                            <p>By accessing and using TeamNotes, you agree to be bound by these terms. If you do not agree, please do not use our service.</p>
+                            
+                            <h3 style={{ color: 'var(--landing-title)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>{"2. Service Provided \"As-Is\""}</h3>
+                            <p>{"TeamNotes is provided on an \"as-is\" and \"as-available\" basis. We make no warranties regarding uptime, data durability, or fitness for a particular purpose."}</p>
+                            
+                            <h3 style={{ color: 'var(--landing-title)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>3. User Responsibilities</h3>
+                            <p>You are solely responsible for securely managing your Room Keys. Because of our zero-knowledge architecture, if you lose your Room Key, we cannot recover your data.</p>
+                        </div>
                     </div>
                 </div>
             )}
